@@ -1,6 +1,7 @@
 import type { IncomingHttpHeaders, Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createJevClient } from '../src/index.js';
+import type { JevRequest, JevResult } from '../src/index.js';
 import { batchRequest, batchResponse } from './fixtures.js';
 import {
   McpSession,
@@ -18,6 +19,58 @@ import {
 
 const SYNTHETIC_KEY = 'synthetic-mcp-key';
 const PROVIDER_STATE_TEXT = batchRequest.state as string;
+const PROTO_KEY = '__proto__';
+const PREFIXED_KEY = '\u0000__proto__';
+
+const specialRequest: JevRequest = {
+  state: {
+    [PROTO_KEY]: { fact: 'retain me' },
+    ordinary: 'ok',
+    evidence: [[{ [PROTO_KEY]: 'nested array evidence' }]],
+  },
+  questions: {
+    [PROTO_KEY]: {
+      type: 'choice',
+      instructions: {
+        [PROTO_KEY]: { note: 'nested instruction' },
+        ordinary: 'plain',
+      },
+      criteria: { [PROTO_KEY]: 'Keep', ordinary: 'Revise' },
+    },
+    [PREFIXED_KEY]: {
+      type: 'noul',
+      instructions: 'Is the note relevant?',
+      criteria: { true: { [PROTO_KEY]: 'Yes' } },
+    },
+  },
+};
+
+const specialResponse: JevResult = {
+  model: 'jev-1.13.0',
+  answers: {
+    [PROTO_KEY]: {
+      type: 'choice',
+      choice: PROTO_KEY,
+      probabilities: { [PROTO_KEY]: 0.9, ordinary: 0.1 },
+      confidence: 0.8,
+    },
+    [PREFIXED_KEY]: { type: 'noul', noul: 0.6 },
+  },
+  usage: { input_tokens: 48, output_tokens: 14 },
+};
+
+const soleProtoRequest: JevRequest = {
+  state: 'Synthetic support note.',
+  questions: {
+    [PROTO_KEY]: { type: 'noul', instructions: 'Is the note relevant?' },
+  },
+};
+
+const soleProtoResponse: JevResult = {
+  model: 'jev-1.13.0',
+  answers: { [PROTO_KEY]: { type: 'noul', noul: 0.4 } },
+  usage: { input_tokens: 9, output_tokens: 4 },
+};
 
 const sessions: McpSession[] = [];
 const servers: Server[] = [];
@@ -86,8 +139,8 @@ describe('stdio startup configuration', () => {
     }
   });
 
-  it('rejects an empty, trailing-text or nonpositive JEV_TIMEOUT_MS without exposing the key', async () => {
-    for (const value of ['', '1500ms', '0']) {
+  it('rejects an empty or trailing-text JEV_TIMEOUT_MS without exposing the key', async () => {
+    for (const value of ['', '1500ms']) {
       const session = await startSession({
         usePreload: false,
         env: { JEV_API_KEY: SYNTHETIC_KEY, JEV_TIMEOUT_MS: value },
@@ -100,16 +153,38 @@ describe('stdio startup configuration', () => {
     }
   });
 
-  it('rejects an empty JEV_MODEL without exposing the key', async () => {
-    const session = await startSession({
-      usePreload: false,
-      env: { JEV_API_KEY: SYNTHETIC_KEY, JEV_MODEL: '' },
-    });
-    const exit = await session.waitForExit();
-    expect(exit.code).toBe(1);
-    expect(session.stderr).toContain('JEV_MODEL');
-    expect(session.stderr).not.toContain(SYNTHETIC_KEY);
-    expect(session.stdoutLines).toEqual([]);
+  it('reports other invalid configuration with one safe diagnostic', async () => {
+    for (const env of [
+      { JEV_API_KEY: SYNTHETIC_KEY, JEV_MODEL: '' },
+      { JEV_API_KEY: SYNTHETIC_KEY, JEV_TIMEOUT_MS: '0' },
+    ]) {
+      const session = await startSession({ usePreload: false, env });
+      const exit = await session.waitForExit();
+      expect(exit).toEqual({ code: 1, signal: null });
+      expect(session.stderr).toContain(
+        'The JEv client configuration is invalid.',
+      );
+      expect(session.stderr).not.toContain('JEV_TIMEOUT_MS');
+      expect(session.stderr).not.toContain(SYNTHETIC_KEY);
+      expect(session.stdoutLines).toEqual([]);
+    }
+  });
+
+  it('does not attribute another invalid setting to a valid JEV_TIMEOUT_MS', async () => {
+    for (const env of [
+      { JEV_API_KEY: SYNTHETIC_KEY, JEV_MODEL: '', JEV_TIMEOUT_MS: '1000' },
+      { JEV_API_KEY: `${SYNTHETIC_KEY}\u0001`, JEV_TIMEOUT_MS: '1000' },
+    ]) {
+      const session = await startSession({ usePreload: false, env });
+      const exit = await session.waitForExit();
+      expect(exit).toEqual({ code: 1, signal: null });
+      expect(session.stderr).toContain(
+        'The JEv client configuration is invalid.',
+      );
+      expect(session.stderr).not.toContain('JEV_TIMEOUT_MS');
+      expect(session.stderr).not.toContain(SYNTHETIC_KEY);
+      expect(session.stdoutLines).toEqual([]);
+    }
   });
 });
 
@@ -204,6 +279,95 @@ describe('stdio tool contract', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(session.stdoutAsProtocolOnly()).toBe(true);
     expect(session.stderr).not.toContain(SYNTHETIC_KEY);
+  }, 15000);
+
+  it('preserves arbitrary map keys through validation and returns them', async () => {
+    const requests: unknown[] = [];
+    const { server, origin } = await startLoopbackServer(
+      async (request, response) => {
+        requests.push(await readJsonBody(request));
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify(specialResponse));
+      },
+    );
+    servers.push(server);
+
+    const session = await startSession({
+      providerOrigin: origin,
+      env: { JEV_API_KEY: SYNTHETIC_KEY },
+    });
+    await session.initialize();
+
+    const result = await session.callTool(specialRequest).response;
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual(specialResponse);
+    expect(JSON.parse(textContent(result))).toEqual(specialResponse);
+
+    expect(requests).toHaveLength(1);
+    const payload = requests[0] as {
+      state: Record<string, unknown>;
+      questions: Record<string, unknown>;
+    };
+    expect(Object.hasOwn(payload.state, PROTO_KEY)).toBe(true);
+    expect(Object.hasOwn(payload.state, 'ordinary')).toBe(true);
+    expect(payload.state[PROTO_KEY]).toEqual({ fact: 'retain me' });
+    expect(payload.state.evidence).toEqual([
+      [{ [PROTO_KEY]: 'nested array evidence' }],
+    ]);
+    const choice = payload.questions[PROTO_KEY] as {
+      instructions: Record<string, unknown>;
+      criteria: Record<string, unknown>;
+    };
+    expect(choice.criteria).toEqual({
+      [PROTO_KEY]: 'Keep',
+      ordinary: 'Revise',
+    });
+    expect(choice.instructions).toEqual({
+      [PROTO_KEY]: { note: 'nested instruction' },
+      ordinary: 'plain',
+    });
+    expect(Object.hasOwn(payload.questions, PREFIXED_KEY)).toBe(true);
+    expect(JSON.stringify(payload)).toContain('"__proto__"');
+
+    const fetchMock = stubFetch(() =>
+      Promise.resolve(jsonResponse(specialResponse)),
+    );
+    const apiResult = await createJevClient({ apiKey: SYNTHETIC_KEY }).evaluate(
+      specialRequest,
+    );
+    expect(result.structuredContent).toEqual(apiResult);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(session.stdoutAsProtocolOnly()).toBe(true);
+    expect(session.stderr).not.toContain(SYNTHETIC_KEY);
+  }, 15000);
+
+  it('accepts a request whose only question id is a special key', async () => {
+    const requests: unknown[] = [];
+    const { server, origin } = await startLoopbackServer(
+      async (request, response) => {
+        requests.push(await readJsonBody(request));
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify(soleProtoResponse));
+      },
+    );
+    servers.push(server);
+
+    const session = await startSession({
+      providerOrigin: origin,
+      env: { JEV_API_KEY: SYNTHETIC_KEY },
+    });
+    await session.initialize();
+
+    const result = await session.callTool(soleProtoRequest).response;
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual(soleProtoResponse);
+    const payload = requests[0] as {
+      state: unknown;
+      questions: Record<string, unknown>;
+    };
+    expect(payload.state).toBe(soleProtoRequest.state);
+    expect(Object.hasOwn(payload.questions, PROTO_KEY)).toBe(true);
+    expect(session.stdoutAsProtocolOnly()).toBe(true);
   }, 15000);
 
   it('uses JEV_MODEL and JEV_TIMEOUT_MS from the environment', async () => {

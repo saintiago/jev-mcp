@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { jevRequestSchema, jevResultSchema } from './contracts.js';
+import { jevResultSchema, jevToolRequestSchema } from './contracts.js';
 import { createJevClient, JevError } from './index.js';
 import type { JevClient } from './index.js';
 
@@ -43,16 +43,11 @@ function clientFromEnvironment(env: NodeJS.ProcessEnv): JevClient {
       ...(model !== undefined && { model }),
       ...(timeoutMs !== undefined && { timeoutMs }),
     });
-  } catch {
-    if (rawTimeout !== undefined) {
-      throw new StartupError(
-        'JEV_TIMEOUT_MS must be a positive whole number of milliseconds.',
-      );
+  } catch (error) {
+    if (error instanceof JevError) {
+      throw new StartupError('The JEv client configuration is invalid.');
     }
-    if (model !== undefined && model.length === 0) {
-      throw new StartupError('JEV_MODEL must not be empty.');
-    }
-    throw new StartupError('The JEv client configuration is invalid.');
+    throw error;
   }
 }
 
@@ -74,7 +69,7 @@ function createServer(client: JevClient): McpServer {
     {
       title: 'Ask JEv',
       description: TOOL_DESCRIPTION,
-      inputSchema: jevRequestSchema,
+      inputSchema: jevToolRequestSchema,
       outputSchema: jevResultSchema,
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
