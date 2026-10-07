@@ -16,6 +16,15 @@ export interface McpSessionOptions {
   providerOrigin?: string;
   env?: Record<string, string>;
   usePreload?: boolean;
+  /** Executable to launch; defaults to the built dist/mcp.js. */
+  executable?: string;
+  /** Preload module that routes provider calls; defaults to mcp-preload.mjs. */
+  preload?: string;
+  /**
+   * Run the executable directly as a command, passing the preload through
+   * NODE_OPTIONS, instead of running it with the current Node binary.
+   */
+  launch?: 'node' | 'command';
 }
 
 export interface McpExit {
@@ -93,23 +102,31 @@ export class McpSession {
   }
 
   static async start(options: McpSessionOptions = {}): Promise<McpSession> {
-    if (!existsSync(MCP_EXECUTABLE)) {
-      throw new Error(
-        `${MCP_EXECUTABLE} is missing; run "npm run build" first`,
-      );
+    const executable = options.executable ?? MCP_EXECUTABLE;
+    if (!existsSync(executable)) {
+      throw new Error(`${executable} is missing; run "npm run build" first`);
     }
-    const env: NodeJS.ProcessEnv = {
+    const usePreload = options.usePreload !== false;
+    const preload = options.preload ?? MCP_PRELOAD;
+    let env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH ?? '',
       ...(options.providerOrigin !== undefined && {
         JEV_TEST_PROVIDER_ORIGIN: options.providerOrigin,
       }),
       ...options.env,
     };
-    const args = [
-      ...(options.usePreload === false ? [] : ['--import', MCP_PRELOAD]),
-      MCP_EXECUTABLE,
-    ];
-    const child = spawn(process.execPath, args, {
+    let command = process.execPath;
+    let args: string[];
+    if (options.launch === 'command') {
+      command = executable;
+      args = [];
+      if (usePreload) {
+        env = { ...env, NODE_OPTIONS: `--import ${preload}` };
+      }
+    } else {
+      args = [...(usePreload ? ['--import', preload] : []), executable];
+    }
+    const child = spawn(command, args, {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });

@@ -12,9 +12,10 @@ npm ci
 npm run validate
 ```
 
-Bootstrap validation checks formatting and TypeScript build only; it does not
-claim the client or MCP exists. Implementation must add real tests to `validate`
-before delivery. No empty placeholder tests or pass-with-no-tests verification.
+`npm run validate` checks formatting, TypeScript, the build, client contracts,
+stdio behavior and the packed consumer. It needs no provider credentials and
+makes no live provider call. No empty placeholder tests or pass-with-no-tests
+verification.
 
 ## Test boundaries
 
@@ -24,7 +25,8 @@ before delivery. No empty placeholder tests or pass-with-no-tests verification.
 - MCP contract: initialize stdio, list/call the tool and check schema/result/error
   parity. Verify stdout remains protocol-only.
 - Packaging: install a tarball into a clean temporary consumer, import its API,
-  check exported types and launch the installed executable.
+  check exported types and launch the installed executable (`npm run test:packed`,
+  included in `npm run validate`).
 - Live smoke: explicit opt-in with `JEV_API_KEY`, small synthetic evidence and
   all modes. No private project text in fixtures.
 
