@@ -1,0 +1,40 @@
+{
+  "name": "@saintiago/jev",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Typed TypeSafe JEv client and thin ask_jev MCP adapter.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "packageManager": "npm@11.11.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/saintiago/jev-mcp.git"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "validate": "npm run format:check && npm run typecheck && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "prettier": "3.9.9",
+    "typescript": "6.0.3"
+  }
+}
