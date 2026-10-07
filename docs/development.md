@@ -31,6 +31,21 @@ before delivery. No empty placeholder tests or pass-with-no-tests verification.
 Prefer boundary tests over internal-helper assertions. Do not repeat the full
 validation suite through both interfaces. Consumer evaluations belong to consumers.
 
+## First implementation acceptance
+
+- With no provider credentials and no live provider access, `npm ci` followed by
+  `npm run validate` checks formatting, TypeScript, build, client contracts, stdio
+  behavior and the packed consumer. The behavioral examples are in
+  [contracts](contracts.md#acceptance-examples).
+- A clean temporary consumer installs the local tarball, imports
+  `createJevClient`, `JevError` and the public types from `@saintiago/jev`, and
+  launches the installed `jev-mcp` command. These checks work without the source
+  checkout as an import or executable dependency and without npm publication.
+- README reports the implemented availability and gives working synthetic
+  examples for choice, score and noul evaluation, plus an MCP host launch using
+  environment credentials. Its API and executable references work from the
+  packed installation. It explains credential setup without including a key.
+
 ## Delivery
 
 Jira: [JEV](https://malton-family.atlassian.net/jira/software/projects/JEV/boards/101).
