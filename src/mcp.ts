@@ -4,7 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { jevResultSchema, jevToolRequestSchema } from './contracts.js';
 import { createJevClient, JevError } from './index.js';
-import type { JevClient } from './index.js';
+import type { JevClient, JevUsageLogOptions } from './index.js';
 
 const SERVER_NAME = 'jev-mcp';
 const SERVER_VERSION = '0.0.0';
@@ -13,7 +13,7 @@ const UNEXPECTED_FAILURE =
   'The evaluation failed unexpectedly. No request details were reported.';
 const TOOL_DESCRIPTION = [
   'Ask TypeSafe JEv for structured judgments about supplied evidence.',
-  'The tool sends the state and questions to the TypeSafe JEv API and does not modify local files.',
+  'The tool sends the state and questions to the TypeSafe JEv API and, when the host enables usage logging, appends one local JSONL usage record per evaluation; otherwise it writes no local files.',
   'Ask narrow questions with explicit alternatives, supply only relevant evidence and batch related questions that share one state.',
   'JEv provides judgments, not code or prose answers; use deterministic tools for arithmetic, counting and executable checks.',
   'Confidence describes the provider distribution and does not authorize bypassing required workflow steps.',
@@ -21,7 +21,10 @@ const TOOL_DESCRIPTION = [
 
 class StartupError extends Error {}
 
-function clientFromEnvironment(env: NodeJS.ProcessEnv): JevClient {
+function clientFromEnvironment(env: NodeJS.ProcessEnv): {
+  client: JevClient;
+  loggingEnabled: boolean;
+} {
   const apiKey = env.JEV_API_KEY;
   if (apiKey === undefined || apiKey.length === 0) {
     throw new StartupError('JEV_API_KEY is required.');
@@ -37,12 +40,30 @@ function clientFromEnvironment(env: NodeJS.ProcessEnv): JevClient {
     }
     timeoutMs = Number(rawTimeout);
   }
+  const usageLogPath = env.JEV_USAGE_LOG_PATH;
+  const usageLogCaller = env.JEV_USAGE_LOG_CALLER;
+  let usageLog: JevUsageLogOptions | undefined;
+  if (usageLogPath !== undefined) {
+    if (usageLogPath.length === 0) {
+      throw new StartupError(
+        'JEV_USAGE_LOG_PATH must name a nonempty file path.',
+      );
+    }
+    usageLog = {
+      path: usageLogPath,
+      ...(usageLogCaller !== undefined && { caller: usageLogCaller }),
+    };
+  }
   try {
-    return createJevClient({
-      apiKey,
-      ...(model !== undefined && { model }),
-      ...(timeoutMs !== undefined && { timeoutMs }),
-    });
+    return {
+      client: createJevClient({
+        apiKey,
+        ...(model !== undefined && { model }),
+        ...(timeoutMs !== undefined && { timeoutMs }),
+        ...(usageLog !== undefined && { usageLog }),
+      }),
+      loggingEnabled: usageLog !== undefined,
+    };
   } catch (error) {
     if (error instanceof JevError) {
       throw new StartupError('The JEv client configuration is invalid.');
@@ -62,7 +83,7 @@ function failureResult(error: JevError): CallToolResult {
   };
 }
 
-function createServer(client: JevClient): McpServer {
+function createServer(client: JevClient, loggingEnabled: boolean): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
   server.registerTool(
     TOOL_NAME,
@@ -71,7 +92,7 @@ function createServer(client: JevClient): McpServer {
       description: TOOL_DESCRIPTION,
       inputSchema: jevToolRequestSchema,
       outputSchema: jevResultSchema,
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: !loggingEnabled, openWorldHint: true },
     },
     async (request, extra) => {
       try {
@@ -114,8 +135,8 @@ function installShutdown(server: McpServer): void {
 }
 
 async function main(): Promise<void> {
-  const client = clientFromEnvironment(process.env);
-  const server = createServer(client);
+  const { client, loggingEnabled } = clientFromEnvironment(process.env);
+  const server = createServer(client, loggingEnabled);
   await server.connect(new StdioServerTransport());
   installShutdown(server);
 }

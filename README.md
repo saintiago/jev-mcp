@@ -7,7 +7,8 @@ A small TypeScript package for TypeSafe JEv structured judgments, with a thin
 `npm run validate` checks formatting, TypeScript, the build, client contracts,
 stdio behavior and the packed consumer without provider credentials or live
 provider access. The package is `private` and unpublished in this increment;
-install it from a packed tarball or the repository checkout.
+install it from a packed tarball or the repository checkout. Opt-in local JSONL
+usage logging is implemented for the TypeScript API and the MCP adapter.
 
 Start with [AGENTS.md](AGENTS.md) and the [project charter](docs/project-charter.md).
 See [contracts](docs/contracts.md) and [development](docs/development.md).
@@ -95,7 +96,8 @@ carry `score` with its legend, and noul answers carry a number from 0 to 1.
 Failures surface as `JevError` with a code of `invalid_input`, `authentication`,
 `rate_limited`, `timeout`, `cancelled`, `unavailable` or `invalid_response`, plus
 the HTTP status when available. There are no automatic retries; consumers own
-fallback policy. Pass an `AbortSignal` to cancel an evaluation.
+fallback policy. Pass an `AbortSignal` to cancel an evaluation. Pass `usageLog`
+to enable the opt-in [usage log](#usage-logging-opt-in).
 
 ## MCP
 
@@ -128,8 +130,62 @@ directory:
 
 `JEV_MODEL` (default `jev-1.13.0`) and `JEV_TIMEOUT_MS` (default 10000) are
 optional. `ask_jev` takes the same state/questions request as the API and sends
-the supplied evidence to TypeSafe; it does not modify local files and cannot
-supply credentials, an endpoint or a file path through tool arguments.
+the supplied evidence to TypeSafe. Tool arguments cannot supply credentials, an
+endpoint, a file path or logging settings. Set `JEV_USAGE_LOG_PATH` to append a
+local usage record per evaluation; see [usage logging](#usage-logging-opt-in).
+
+## Usage logging (opt-in)
+
+Both interfaces can append one JSONL record per completed evaluation, including
+failures. Logging is off by default: without the settings below, constructing a
+client or running MCP writes no usage file, and enabling logging writes nothing
+until an evaluation completes.
+
+TypeScript applications enable it with the `usageLog` option. A relative path
+resolves against the process working directory when the client is created:
+
+```ts
+const client = createJevClient({
+  apiKey,
+  usageLog: { path: '/var/log/jev/usage.jsonl', caller: 'support-agent' },
+});
+```
+
+MCP hosts enable it through the process environment and should use an absolute
+path because the host may start from any working directory:
+
+```json
+{
+  "mcpServers": {
+    "jev": {
+      "command": "/path/to/consumer/node_modules/.bin/jev-mcp",
+      "env": {
+        "JEV_API_KEY": "<your TypeSafe key>",
+        "JEV_USAGE_LOG_PATH": "/var/log/jev/usage.jsonl",
+        "JEV_USAGE_LOG_CALLER": "support-agent"
+      }
+    }
+  }
+}
+```
+
+`JEV_USAGE_LOG_PATH` selects the file and enables logging; `JEV_USAGE_LOG_CALLER`
+optionally supplies the label. Without a path setting, logging stays disabled and
+the label has no effect. Tool arguments cannot enable logging or select its path,
+and tool discovery reports the write: `readOnlyHint` is false while the host
+enables logging.
+
+The host must create the parent directory. The first logged evaluation creates
+the file with mode `0600` (subject to the host's umask); appends preserve
+existing contents and never truncate. Each line is one compact JSON object with
+the evaluation start timestamp, duration in milliseconds, model, the submitted
+questions, and on success the returned answers and token usage or on failure the
+safe error code, plus an explicitly configured caller label. Supplied state,
+credentials, authentication headers and provider error bodies are never written,
+but questions, answers and the label can contain sensitive user content. Logging
+is best effort, not an audit trail: write failures leave evaluation results and
+errors unchanged, and independent clients or processes should use separate files
+because the package does not lock across writers.
 
 ## Credentials and live calls
 

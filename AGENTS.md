@@ -18,7 +18,9 @@ with TERM=xterm-256color and COLORTERM=truecolor.
 
 Keep the API independent of MCP and consumers. The adapter calls the public API;
 it must not duplicate request, validation or error policy. Consumers own prompts,
-routing, thresholds and decisions. Never log credentials or raw request content.
+routing, thresholds and decisions. Allow only the opt-in local usage log defined
+in [contracts](docs/contracts.md#local-usage-logging). Never log supplied state,
+credentials, authentication headers or raw provider error bodies.
 
 ## Authoritative documents
 

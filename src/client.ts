@@ -11,6 +11,12 @@ import type {
   JevResult,
 } from './contracts.js';
 import { JevError } from './errors.js';
+import { createUsageLog } from './usage-log.js';
+import type {
+  JevUsageLog,
+  JevUsageLogOptions,
+  JevUsageRecord,
+} from './usage-log.js';
 
 const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 const DEFAULT_MODEL = 'jev-1.13.0';
@@ -22,6 +28,7 @@ export interface JevClientOptions {
   apiKey: string;
   model?: string;
   timeoutMs?: number;
+  usageLog?: JevUsageLogOptions;
 }
 
 export interface JevEvaluateOptions {
@@ -39,6 +46,7 @@ interface JevClientConfig {
   apiKey: string;
   model: string;
   timeoutMs: number;
+  usageLog: JevUsageLog | undefined;
 }
 
 type AbortSource = 'timeout' | 'cancelled';
@@ -99,7 +107,38 @@ function parseOptions(options: JevClientOptions): JevClientConfig {
   ) {
     throw new JevError('invalid_input');
   }
-  return { apiKey, model, timeoutMs };
+  return {
+    apiKey,
+    model,
+    timeoutMs,
+    usageLog: parseUsageLog(options.usageLog),
+  };
+}
+
+function parseUsageLog(
+  usageLog: JevUsageLogOptions | undefined,
+): JevUsageLog | undefined {
+  if (usageLog === undefined) {
+    return undefined;
+  }
+  if (typeof usageLog !== 'object' || usageLog === null) {
+    throw new JevError('invalid_input');
+  }
+  const { path, caller } = usageLog;
+  if (
+    typeof path !== 'string' ||
+    path.length === 0 ||
+    path.includes('\u0000')
+  ) {
+    throw new JevError('invalid_input');
+  }
+  if (
+    caller !== undefined &&
+    (typeof caller !== 'string' || caller.length === 0)
+  ) {
+    throw new JevError('invalid_input');
+  }
+  return createUsageLog({ path, ...(caller !== undefined && { caller }) });
 }
 
 async function evaluateRequest(
@@ -107,7 +146,57 @@ async function evaluateRequest(
   request: JevRequest,
   options?: JevEvaluateOptions,
 ): Promise<JevResult> {
-  const snapshot = snapshotRequest(request);
+  const usageLog = config.usageLog;
+  if (usageLog === undefined) {
+    return await runEvaluation(config, snapshotRequest(request), options);
+  }
+  const startedAt = new Date();
+  const startTime = performance.now();
+  let snapshot: JevRequest | undefined;
+  try {
+    snapshot = snapshotRequest(request);
+    const result = await runEvaluation(config, snapshot, options);
+    await appendUsage(usageLog, {
+      timestamp: startedAt.toISOString(),
+      durationMs: elapsedMs(startTime),
+      model: result.model,
+      questions: snapshot.questions,
+      answers: result.answers,
+      usage: result.usage,
+      ...(usageLog.caller !== undefined && { caller: usageLog.caller }),
+    });
+    return result;
+  } catch (error) {
+    await appendUsage(usageLog, {
+      timestamp: startedAt.toISOString(),
+      durationMs: elapsedMs(startTime),
+      model: config.model,
+      ...(snapshot !== undefined && { questions: snapshot.questions }),
+      errorCode: error instanceof JevError ? error.code : 'unavailable',
+      ...(usageLog.caller !== undefined && { caller: usageLog.caller }),
+    });
+    throw error;
+  }
+}
+
+async function appendUsage(
+  usageLog: JevUsageLog,
+  record: JevUsageRecord,
+): Promise<void> {
+  try {
+    await usageLog.append(record);
+  } catch {}
+}
+
+function elapsedMs(startTime: number): number {
+  return Math.max(0, Math.round(performance.now() - startTime));
+}
+
+async function runEvaluation(
+  config: JevClientConfig,
+  snapshot: JevRequest,
+  options?: JevEvaluateOptions,
+): Promise<JevResult> {
   const callerSignal = options?.signal;
   if (callerSignal?.aborted === true) {
     throw new JevError('cancelled');

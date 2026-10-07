@@ -31,7 +31,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run test:client && npm run test:stdio",
-    "test:client": "vitest run tests/client.test.ts tests/client-failures.test.ts tests/client-transport.test.ts",
+    "test:client": "vitest run tests/client.test.ts tests/client-failures.test.ts tests/client-transport.test.ts tests/usage-log.test.ts",
     "test:stdio": "vitest run tests/mcp-stdio.test.ts",
     "test:packed": "vitest run tests/packed-consumer.test.ts",
     "validate": "npm run format:check && npm run typecheck && npm run build && npm run test && npm run test:packed"

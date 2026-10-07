@@ -21,3 +21,4 @@ export type {
 } from './contracts.js';
 export { JevError } from './errors.js';
 export type { JevErrorCode } from './errors.js';
+export type { JevUsageLogOptions } from './usage-log.js';
