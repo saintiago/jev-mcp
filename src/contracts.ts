@@ -66,6 +66,12 @@ export const jevRequestSchema = z.strictObject({
     .refine((questions) => Object.keys(questions).length > 0),
 });
 
+// The MCP SDK parses tool arguments with this schema before the handler runs;
+// this copy keeps own `__proto__`/escape-prefixed keys that Zod's record and
+// object parsing would otherwise drop. It shares the request definition, so
+// discovery and validation stay those of `jevRequestSchema`.
+export const jevToolRequestSchema = preserveJsonKeys(jevRequestSchema);
+
 const probabilitySchema = z
   .number()
   .min(0)
@@ -198,6 +204,25 @@ function mapKeys(value: unknown, transform: (key: string) => string): unknown {
     }
   }
   return root;
+}
+
+function preserveJsonKeys<T extends z.ZodType>(schema: T): T {
+  const clone = schema.clone();
+  const run = clone._zod.run;
+  clone._zod.run = (payload, ctx) => {
+    const escaped = run(
+      { ...payload, value: mapKeys(payload.value, escapeKey) },
+      ctx,
+    );
+    if (escaped instanceof Promise) {
+      return escaped.then((settled) => ({
+        ...settled,
+        value: mapKeys(settled.value, restoreKey),
+      }));
+    }
+    return { ...escaped, value: mapKeys(escaped.value, restoreKey) };
+  };
+  return clone;
 }
 
 export function parseJsonValue<T>(

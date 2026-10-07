@@ -82,13 +82,17 @@ reproduce evaluation rules.
 
 At startup, parse the optional timeout environment value without accepting an
 empty value or trailing nonnumeric text; pass the resulting options to
-`createJevClient` for configuration validation. Register shared request/result
-schemas with the maintained MCP SDK. The handler passes the SDK's per-request
-signal to `evaluate`, then returns the same result as `structuredContent` and
-JSON text. Convert `JevError` to an `isError` tool result containing its safe
-code/message and status when present. Unexpected failures receive a fixed safe
-message; protocol input failures remain with the SDK. Diagnostics must not print
-raw exceptions or configuration values.
+`createJevClient`, which owns configuration validation. Startup diagnostics name
+a setting only when a check performed here establishes it; other configuration
+failures use one safe, non-attributing message. Register the shared request/result
+schemas with the maintained MCP SDK, but keep tool-argument parsing from
+transforming the request: the SDK parses arguments before the handler runs, so
+registration must preserve arbitrary own JSON keys such as `__proto__`. The
+handler passes the SDK's per-request signal to `evaluate`, then returns the same
+result as `structuredContent` and JSON text. Convert `JevError` to an `isError`
+tool result containing its safe code/message and status when present. Unexpected
+failures receive a fixed safe message; protocol input failures remain with the
+SDK. Diagnostics must not print raw exceptions or configuration values.
 
 Use the SDK's request cancellation and connection-close abort behavior instead
 of maintaining a parallel collection of in-flight requests. The executable must
