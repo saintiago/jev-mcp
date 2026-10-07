@@ -134,30 +134,83 @@ function restoreKey(key: string): string {
     : key;
 }
 
+interface KeyMapFrame {
+  source: Record<string, unknown>;
+  target: object;
+  keys: string[];
+  index: number;
+}
+
+function defineEntry(target: object, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
 function mapKeys(value: unknown, transform: (key: string) => string): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => mapKeys(item, transform));
-  }
   if (value === null || typeof value !== 'object') {
     return value;
   }
-  const entries: Array<[string, unknown]> = [];
-  for (const key of Object.keys(value)) {
-    entries.push([
-      transform(key),
-      mapKeys((value as Record<string, unknown>)[key], transform),
-    ]);
+  const root = Array.isArray(value) ? [] : {};
+  const ancestors = new Set<object>([value]);
+  const stack: KeyMapFrame[] = [
+    {
+      source: value as Record<string, unknown>,
+      target: root,
+      keys: Object.keys(value),
+      index: 0,
+    },
+  ];
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (frame === undefined) {
+      break;
+    }
+    if (frame.index >= frame.keys.length) {
+      ancestors.delete(frame.source);
+      stack.pop();
+      continue;
+    }
+    const key = frame.keys[frame.index];
+    frame.index += 1;
+    if (key === undefined) {
+      continue;
+    }
+    const child = frame.source[key];
+    if (child !== null && typeof child === 'object') {
+      if (ancestors.has(child)) {
+        throw new Error('cyclic value');
+      }
+      ancestors.add(child);
+      const target = Array.isArray(child) ? [] : {};
+      defineEntry(frame.target, transform(key), target);
+      stack.push({
+        source: child as Record<string, unknown>,
+        target,
+        keys: Object.keys(child),
+        index: 0,
+      });
+    } else {
+      defineEntry(frame.target, transform(key), child);
+    }
   }
-  return Object.fromEntries(entries);
+  return root;
 }
 
 export function parseJsonValue<T>(
   schema: z.ZodType<T>,
   value: unknown,
 ): T | undefined {
-  const parsed = schema.safeParse(mapKeys(value, escapeKey));
-  if (!parsed.success) {
+  try {
+    const parsed = schema.safeParse(mapKeys(value, escapeKey));
+    if (!parsed.success) {
+      return undefined;
+    }
+    return mapKeys(parsed.data, restoreKey) as T;
+  } catch {
     return undefined;
   }
-  return mapKeys(parsed.data, restoreKey) as T;
 }

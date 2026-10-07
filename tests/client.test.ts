@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createJevClient } from '../src/index.js';
+import { createJevClient, JevError } from '../src/index.js';
 import type { JevRequest } from '../src/index.js';
 import {
   batchRequest,
@@ -182,6 +182,32 @@ describe('batching and all modes', () => {
     const result = await client.evaluate(batchRequest);
 
     expect(result).toEqual(batchResponse);
+  });
+
+  it('tolerates deeply nested compatible extra provider fields', async () => {
+    const nesting = 10000;
+    const payload =
+      '{"model":"jev-1.13.0","answers":{"relevant":{"type":"noul","noul":0.73}},"usage":{"input_tokens":1,"output_tokens":1},"extra":' +
+      '['.repeat(nesting) +
+      '0' +
+      ']'.repeat(nesting) +
+      '}';
+    const request: JevRequest = {
+      state: 'Synthetic state',
+      questions: {
+        relevant: { type: 'noul', instructions: 'Is the note relevant?' },
+      },
+    };
+    stubFetch(() => Promise.resolve(new Response(payload, { status: 200 })));
+    const client = createJevClient({ apiKey: 'synthetic-key' });
+
+    const result = await client.evaluate(request);
+
+    expect(result).toEqual({
+      model: 'jev-1.13.0',
+      answers: { relevant: { type: 'noul', noul: 0.73 } },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
   });
 
   it('accepts floating-point probability sums that are not exactly one', async () => {
@@ -535,6 +561,31 @@ describe('invalid requests', () => {
     expect(error.code).toBe('invalid_input');
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('contains parser exceptions for deeply nested state as invalid_input', async () => {
+    let state: JevRequest['state'] = 'Synthetic leaf';
+    for (let depth = 0; depth < 2500; depth += 1) {
+      state = { nested: state };
+    }
+    const fetchMock = stubFetch(() =>
+      Promise.resolve(jsonResponse(batchResponse)),
+    );
+    const client = createJevClient({ apiKey: 'synthetic-key' });
+
+    const error = await failureOf(
+      client.evaluate({
+        state,
+        questions: {
+          relevant: { type: 'noul', instructions: 'Is it relevant?' },
+        },
+      }),
+    );
+
+    expect(error).toBeInstanceOf(JevError);
+    expect(error.code).toBe('invalid_input');
+    expect(error.status).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('response validation', () => {
@@ -672,7 +723,7 @@ describe('response validation', () => {
       const error = await failureOf(client.evaluate(batchRequest));
 
       expect(error.code).toBe('invalid_response');
-      expect(error.status).toBeUndefined();
+      expect(error.status).toBe(200);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   }
@@ -696,6 +747,7 @@ describe('response validation', () => {
     const error = await failureOf(client.evaluate(batchRequest));
 
     expect(error.code).toBe('invalid_response');
+    expect(error.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -706,5 +758,6 @@ describe('response validation', () => {
     const error = await failureOf(client.evaluate(batchRequest));
 
     expect(error.code).toBe('invalid_response');
+    expect(error.status).toBe(200);
   });
 });

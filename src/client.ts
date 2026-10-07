@@ -15,6 +15,7 @@ import { JevError } from './errors.js';
 const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 const DEFAULT_MODEL = 'jev-1.13.0';
 const DEFAULT_TIMEOUT_MS = 10000;
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 
 export interface JevClientOptions {
@@ -41,6 +42,30 @@ interface JevClientConfig {
 }
 
 type AbortSource = 'timeout' | 'cancelled';
+
+function scheduleDeadline(delayMs: number, onDeadline: () => void): () => void {
+  let timer: NodeJS.Timeout | undefined;
+  const scheduleChunk = (remainingMs: number): void => {
+    timer = setTimeout(
+      () => {
+        const rest = remainingMs - MAX_TIMER_DELAY_MS;
+        if (rest > 0) {
+          scheduleChunk(rest);
+        } else {
+          onDeadline();
+        }
+      },
+      Math.min(remainingMs, MAX_TIMER_DELAY_MS),
+    );
+  };
+  scheduleChunk(delayMs);
+  return () => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+}
 
 export function createJevClient(options: JevClientOptions): JevClient {
   const config = parseOptions(options);
@@ -98,17 +123,19 @@ async function evaluateRequest(
     controller.abort();
   };
   const onCallerAbort = (): void => abortWith('cancelled');
-  const timer = setTimeout(() => abortWith('timeout'), config.timeoutMs);
+  const cancelDeadline = scheduleDeadline(config.timeoutMs, () =>
+    abortWith('timeout'),
+  );
   callerSignal?.addEventListener('abort', onCallerAbort, { once: true });
 
-  const abortError = (): JevError => {
+  const callFailure = (status: number | undefined): JevError => {
     if (abortSource === 'timeout') {
-      return new JevError('timeout');
+      return new JevError('timeout', status);
     }
     if (abortSource === 'cancelled') {
-      return new JevError('cancelled');
+      return new JevError('cancelled', status);
     }
-    return new JevError('unavailable');
+    return new JevError('unavailable', status);
   };
 
   try {
@@ -125,10 +152,11 @@ async function evaluateRequest(
           model: config.model,
           questions: snapshot.questions,
         }),
+        redirect: 'manual',
         signal: controller.signal,
       });
     } catch {
-      throw abortError();
+      throw callFailure(undefined);
     }
 
     if (!response.ok) {
@@ -140,24 +168,23 @@ async function evaluateRequest(
     try {
       payload = await response.text();
     } catch {
-      throw abortError();
+      throw callFailure(response.status);
     }
 
     let body: unknown;
     try {
       body = JSON.parse(payload);
     } catch {
-      throw new JevError('invalid_response');
+      throw new JevError('invalid_response', response.status);
     }
 
     const result = parseJsonValue(jevResultSchema, body);
-    if (result === undefined) {
-      throw new JevError('invalid_response');
+    if (result === undefined || !answersMatch(result, snapshot)) {
+      throw new JevError('invalid_response', response.status);
     }
-    assertAnswersMatch(result, snapshot);
     return result;
   } finally {
-    clearTimeout(timer);
+    cancelDeadline();
     callerSignal?.removeEventListener('abort', onCallerAbort);
   }
 }
@@ -234,10 +261,10 @@ function isJsonCompatible(value: unknown, ancestors: Set<object>): boolean {
   return true;
 }
 
-function assertAnswersMatch(result: JevResult, request: JevRequest): void {
+function answersMatch(result: JevResult, request: JevRequest): boolean {
   const questionIds = Object.keys(request.questions);
   if (Object.keys(result.answers).length !== questionIds.length) {
-    throw new JevError('invalid_response');
+    return false;
   }
   for (const id of questionIds) {
     const question = request.questions[id];
@@ -247,9 +274,10 @@ function assertAnswersMatch(result: JevResult, request: JevRequest): void {
       answer === undefined ||
       !answerMatches(question, answer)
     ) {
-      throw new JevError('invalid_response');
+      return false;
     }
   }
+  return true;
 }
 
 function answerMatches(question: JevQuestion, answer: JevAnswer): boolean {

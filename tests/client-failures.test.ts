@@ -56,7 +56,7 @@ describe('provider failures', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('maps a failed body read to unavailable without a status', async () => {
+  it('maps a failed body read to unavailable and retains the status', async () => {
     const fetchMock = stubFetch(() =>
       Promise.resolve({
         ok: true,
@@ -70,13 +70,13 @@ describe('provider failures', () => {
     const error = await failureOf(client.evaluate(batchRequest));
 
     expect(error.code).toBe('unavailable');
-    expect(error.status).toBeUndefined();
+    expect(error.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('bounded calls', () => {
-  it('rejects with timeout when the deadline passes during body reading', async () => {
+  it('rejects with timeout before response headers without a status', async () => {
     const fetchMock = stubFetch(stallingFetch());
     const client = createJevClient({
       apiKey: 'synthetic-key',
@@ -90,7 +90,7 @@ describe('bounded calls', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects with cancelled when the caller cancels before the deadline', async () => {
+  it('rejects with cancelled before response headers without a status', async () => {
     const controller = new AbortController();
     const fetchMock = stubFetch(stallingFetch());
     const client = createJevClient({
@@ -152,6 +152,69 @@ describe('bounded calls', () => {
     expect(error.code).toBe('timeout');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('deadline scheduling', () => {
+  const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
+  async function expectTimeoutAt(timeoutMs: number): Promise<void> {
+    vi.useFakeTimers();
+    const fetchMock = stubFetch(stallingFetch());
+    const client = createJevClient({ apiKey: 'synthetic-key', timeoutMs });
+    let settled = false;
+    const evaluation = client.evaluate(batchRequest);
+    const outcome = evaluation.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await outcome;
+
+    expect(settled).toBe(true);
+    const error = await failureOf(evaluation);
+    expect(error.code).toBe('timeout');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  }
+
+  it('honors a timeout at the maximum timer delay', async () => {
+    await expectTimeoutAt(MAX_TIMER_DELAY_MS);
+  });
+
+  it('does not clamp a timeout above the maximum timer delay', async () => {
+    await expectTimeoutAt(MAX_TIMER_DELAY_MS + 1);
+  });
+
+  it('schedules an above-range timeout without a timer overflow warning', async () => {
+    const warnings: string[] = [];
+    const onWarning = (warning: Error): void => {
+      warnings.push(warning.name);
+    };
+    process.on('warning', onWarning);
+    try {
+      stubFetch(() => Promise.resolve(jsonResponse(batchResponse)));
+      const client = createJevClient({
+        apiKey: 'synthetic-key',
+        timeoutMs: MAX_TIMER_DELAY_MS + 1,
+      });
+
+      await client.evaluate(batchRequest);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+
+      expect(warnings).toEqual([]);
+    } finally {
+      process.off('warning', onWarning);
+    }
   });
 });
 
@@ -231,6 +294,7 @@ describe('safe failures', () => {
     const error = await failureOf(client.evaluate(request));
 
     expect(error.code).toBe('invalid_response');
+    expect(error.status).toBe(200);
     expect(error.message).not.toContain(secretKey);
     expect(error.message).not.toContain(secretState);
     expect(JSON.stringify(error)).not.toContain(secretKey);
