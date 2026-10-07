@@ -100,21 +100,26 @@ fallback policy. Pass an `AbortSignal` to cancel an evaluation.
 ## MCP
 
 The packed package installs the `jev-mcp` executable, which speaks MCP over
-stdio and exposes one `ask_jev` tool:
+stdio and exposes one `ask_jev` tool. Launch the executable inside the consumer
+installation, where `/path/to/consumer` is the directory you installed the
+tarball into:
 
 ```sh
-JEV_API_KEY=... npx jev-mcp
+JEV_API_KEY=... /path/to/consumer/node_modules/.bin/jev-mcp
 ```
 
-An MCP host launches the same command and supplies credentials through its
-environment:
+`npx jev-mcp` also resolves the executable when run from the consumer directory
+itself, but not elsewhere: the package is private and unpublished.
+
+An MCP host launches that installed path and supplies credentials through its
+environment. Use the absolute path because the host may start from any working
+directory:
 
 ```json
 {
   "mcpServers": {
     "jev": {
-      "command": "npx",
-      "args": ["jev-mcp"],
+      "command": "/path/to/consumer/node_modules/.bin/jev-mcp",
       "env": { "JEV_API_KEY": "<your TypeSafe key>" }
     }
   }
