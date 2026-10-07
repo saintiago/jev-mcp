@@ -128,8 +128,11 @@ directory:
 
 `JEV_MODEL` (default `jev-1.13.0`) and `JEV_TIMEOUT_MS` (default 10000) are
 optional. `ask_jev` takes the same state/questions request as the API and sends
-the supplied evidence to TypeSafe; it does not modify local files and cannot
-supply credentials, an endpoint or a file path through tool arguments.
+the supplied evidence to TypeSafe. Tool arguments cannot supply credentials, an
+endpoint or a file path. The implemented adapter does not modify local files;
+the requested opt-in usage logging is specified in the
+[contracts](docs/contracts.md#local-usage-logging) and awaits implementation with
+enablement and file-location instructions.
 
 ## Credentials and live calls
 

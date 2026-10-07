@@ -1,6 +1,6 @@
 # API and MCP contracts
 
-This document specifies the first implementation. The
+This document specifies the public API and MCP behavior. The
 [TypeSafe API reference](https://docs.typesafe.ai/api) owns provider wire schemas.
 Use its documented System One endpoint and bearer authentication.
 
@@ -70,7 +70,8 @@ Expose one `ask_jev` tool. Input is the API's state/questions request. Return th
 API result as structured content, with JSON text for text-only clients. Tool
 errors use MCP's error mechanism and the same safe code/message; protocol input
 errors follow the SDK. Propagate cancellation to the client. Declare accurately
-that it sends supplied evidence to TypeSafe and does not modify local files.
+that it sends supplied evidence to TypeSafe and may append a local usage log when
+the host enables logging. Tool arguments cannot enable logging or select its path.
 
 Tool guidance: narrow questions, explicit alternatives, only relevant evidence,
 and batching for shared state. JEv provides judgments, not code or prose answers.
@@ -80,6 +81,53 @@ does not authorize bypassing required workflow steps.
 An MCP host launches the built executable and inherits the provider key from its
 environment. TypeScript consumers import the package root and pass credentials
 explicitly. Examples use synthetic context and environment references, never keys.
+
+## Local usage logging
+
+Let applications and agent hosts inspect how they use JEv by reading an opt-in
+local JSONL file. A host enables logging and chooses its destination, optionally
+supplies a caller/agent label, makes ordinary evaluations, then reads the file.
+The affected behavior is configuration, evaluation records, data exclusion and
+MCP protocol compatibility; judgments and consumer decision policy stay the same.
+
+- Logging is disabled by default in both interfaces. Importing the package,
+  constructing a client or starting MCP does not create usage records. TypeScript
+  applications configure logging explicitly; MCP hosts configure it through the
+  process environment. Keep configuration small and keep paths out of tool input.
+- With logging enabled and a writable destination, append one JSON object per
+  line for each completed client evaluation, including failures. A batch of
+  questions is one call. An `ask_jev` call delegated to that client produces one
+  record, without an additional wrapper record. Startup and MCP protocol errors
+  rejected before client evaluation are outside this log.
+- Each record includes a timestamp identifying the evaluation's start, model,
+  submitted questions with their IDs, instructions and criteria, and elapsed
+  evaluation duration in milliseconds. Duration is nonnegative and describes the
+  evaluation, excluding the log write. On success, retain the returned model,
+  answers and available token usage exactly as exposed by the public result.
+  On failure, use the configured model and the existing safe `JevError.code`;
+  omit answers and unavailable usage rather than inventing values. Input validation
+  failures still produce a record with `invalid_input`; questions may be omitted
+  when no valid request can be obtained, without serializing invalid raw input.
+- Include a caller/agent label only when the application or host explicitly
+  supplies it. Otherwise omit it. Do not infer identity from the environment,
+  process, MCP client metadata or request content, or add identity plumbing.
+- Omit supplied state/context, configured credentials, authentication headers,
+  raw provider error bodies and raw exception messages. Logging questions and
+  answers is intentional; enabling instructions must warn that these fields and
+  a supplied label can contain sensitive user content. This feature does not
+  infer or redact arbitrary secrets embedded in those allowed fields.
+- Preserve existing file contents when adding records. Logging failures, including
+  an unwritable destination, must not change a successful result or replace an
+  evaluation error. Logs never go to stdout; MCP stdout remains protocol-only.
+  Existing safe-error, validation, timeout, cancellation and no-retry behavior
+  continues to apply.
+- Delivery documentation must show how to enable logging for the TypeScript API
+  and MCP host, how the file destination is selected and where to read records.
+  Focused tests cover successful and failed evaluations, excluded data, the
+  single-record MCP behavior and isolation from write failures.
+
+Only local usage records are in scope. No dashboard, analytics service, database,
+rotation framework or Nexus workflow changes are part of this feature.
 
 ## Acceptance examples
 
@@ -127,3 +175,35 @@ introducing another request or response format.
   clear, secret-free startup failure. Cancelling an outstanding tool call cancels
   its provider call; closing the connection aborts outstanding calls. Successful
   operation and failures leave stdout containing only protocol messages.
+- **Logging opt-in:** With no logging configuration, importing the API,
+  constructing a client and making API or MCP evaluations creates no usage file.
+  Enabling logging alone creates no call record before an evaluation occurs.
+- **Successful usage record:** With a writable configured file containing an
+  existing line, evaluate a synthetic batch of choice, score and noul questions.
+  Exactly one new parseable JSON line is appended and the existing line remains.
+  The record identifies the evaluation's start, has a nonnegative duration in
+  milliseconds, and preserves submitted questions and the returned model, answers
+  and token usage. The evaluation returns the same result as with logging disabled.
+- **Failed usage record:** With logging enabled, a provider 429 appends one record
+  containing the configured model, submitted questions, start timestamp, duration
+  and `rate_limited`, with no answers or fabricated usage. The API still rejects
+  with its usual safe error. A locally invalid request records `invalid_input`
+  without a provider call or unsafe serialization of invalid input.
+- **Excluded data:** Put distinct synthetic markers in state, the configured API
+  key and a controlled provider error body. After a successful call and a failed
+  call, neither the JSONL file nor diagnostics contains those markers or an
+  authentication header. The deliberately supplied question text remains in the
+  file; existing safe errors still exclude it.
+- **Supplied attribution:** Configure the label `review-agent` and make an
+  evaluation; its record contains that label. Make an evaluation without a label;
+  its record omits caller/agent attribution even if MCP client metadata or the
+  process environment identifies a user or agent.
+- **MCP logging parity:** Enable logging through host configuration and call
+  `ask_jev` with a batch. A success appends one record with the same information
+  as a direct API evaluation; a provider 429 appends one failed record. Neither
+  call duplicates records through the adapter, and stdout contains only MCP
+  protocol messages. Tool discovery accurately describes the optional log write.
+- **Write failure isolation:** Configure a destination that cannot be written.
+  A valid provider response still returns its ordinary API/MCP result, and a
+  provider 429 still surfaces `rate_limited`. Neither outcome exposes secrets or
+  writes non-protocol text to MCP stdout.

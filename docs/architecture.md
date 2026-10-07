@@ -65,9 +65,10 @@ The recorded abort source distinguishes `timeout` from `cancelled`, including
 when cancellation interrupts the body read. Error categorization is owned here,
 as specified by [contracts](contracts.md#failures); neither native error messages,
 abort reasons, Zod diagnostics nor raw provider bodies become public messages.
-Retain the HTTP status when known. No client logging or persistent request state
-is needed. Credentials stay in client configuration and the Authorization header;
-evidence exists only in the call and its provider payload.
+Retain the HTTP status when known. The optional local usage log follows
+[contracts](contracts.md#local-usage-logging); it must not change evaluation results.
+Credentials stay in client configuration and the Authorization header. Supplied
+state exists only in the call and its provider payload, never in the usage log.
 
 ## MCP adapter
 
@@ -105,8 +106,10 @@ an outstanding provider call, without relying on a test runner to kill the child
 ## Composition and ownership
 
 The package entry point exports the client; the executable starts the adapter.
-They share contract definitions. There is no shared service or durable state.
-Every request supplies its own evidence.
+They share contract definitions. There is no shared service. The opt-in local
+usage log is the only persistent output; every request supplies its own evidence.
+The adapter uses the public client's logging capability so one evaluation produces
+one record. Consumers supply any caller label; the package owns no identity system.
 
 Keep the implementation in a few focused modules: shared schemas/types, safe
 errors, client evaluation, and MCP startup. `src/index.ts` exports the client,
