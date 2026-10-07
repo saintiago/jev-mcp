@@ -18,6 +18,57 @@ Its public interface is in [contracts](contracts.md). Its external provider boun
 is TypeSafe's documented System One API. One provider does not justify a plugin
 framework.
 
+### Contract definitions
+
+Keep Zod request/result schemas in one shared contract module, with public
+TypeScript types derived from them. Model questions and answers as discriminated
+unions on `type`; maps retain caller-supplied question IDs and choice labels.
+Use the provider's documented field names and shapes directly, without a second
+normalized representation. The client and MCP registration use the same schema
+definitions; request-relative result checks belong to the client.
+
+Validate JSON compatibility before recursive schema parsing or serialization.
+State, instructions and descriptions are data: reject cycles, unsupported values
+and nonfinite numbers with `invalid_input`, rather than coercing them or exposing
+a serializer error. Nested JSON scalars remain valid where the contract allows
+objects or arrays. Do not add content-size limits or interpret evidence as file
+paths, templates or executable instructions. Preserve arbitrary map keys using
+own-property lookup and safe record construction.
+
+Parse into a request snapshot before starting asynchronous work. Use that same
+snapshot to serialize the provider request and check its response, so caller
+mutation cannot change validation after submission. Validate every requested
+answer's type and its choice labels/distribution or score level indices against
+the submitted criteria. Check the documented numeric ranges and required fields;
+do not reconstruct the selected answer, legend, confidence or probabilities.
+Accept compatible extra response properties, returning the documented fields
+with their original values. Do not enforce an exact probability sum.
+
+### Evaluation lifecycle
+
+Validate configuration when constructing the client and input before network
+activity. The client retains explicit configuration in memory and has no startup
+or shutdown operation. Each `evaluate` call owns its resources independently:
+
+1. Validate and snapshot the request, then check caller cancellation.
+2. Start one deadline and one AbortController; forward caller cancellation to
+   that controller and record which cancellation source occurred first.
+3. Use native fetch for one authenticated POST to the fixed System One endpoint,
+   containing the snapshot and configured model. No retries or fallback calls.
+4. Keep the deadline and signal active through successful response body reading,
+   JSON parsing and validation. Map unsuccessful HTTP status directly without
+   using the provider error body as a message; release any unread body.
+5. Return the validated result or a `JevError`. In `finally`, clear the timer and
+   remove the caller listener on every path.
+
+The recorded abort source distinguishes `timeout` from `cancelled`, including
+when cancellation interrupts the body read. Error categorization is owned here,
+as specified by [contracts](contracts.md#failures); neither native error messages,
+abort reasons, Zod diagnostics nor raw provider bodies become public messages.
+Retain the HTTP status when known. No client logging or persistent request state
+is needed. Credentials stay in client configuration and the Authorization header;
+evidence exists only in the call and its provider payload.
+
 ## MCP adapter
 
 Own process startup, environment configuration and the MCP protocol. Expose one
@@ -29,12 +80,65 @@ Its external interface is `ask_jev`, specified in [contracts](contracts.md). Onl
 the adapter reads process environment. It does not import client internals to
 reproduce evaluation rules.
 
+At startup, parse the optional timeout environment value without accepting an
+empty value or trailing nonnumeric text; pass the resulting options to
+`createJevClient` for configuration validation. Register shared request/result
+schemas with the maintained MCP SDK. The handler passes the SDK's per-request
+signal to `evaluate`, then returns the same result as `structuredContent` and
+JSON text. Convert `JevError` to an `isError` tool result containing its safe
+code/message and status when present. Unexpected failures receive a fixed safe
+message; protocol input failures remain with the SDK. Diagnostics must not print
+raw exceptions or configuration values.
+
+Use the SDK's request cancellation and connection-close abort behavior instead
+of maintaining a parallel collection of in-flight requests. The executable must
+connect stdin EOF and termination signals to one idempotent server-close path;
+stdio transport startup alone must not be assumed to handle EOF. Closing the
+server then aborts handler signals, which release client calls through their
+normal cleanup. Remove process listeners during shutdown. Test EOF shutdown with
+an outstanding provider call, without relying on a test runner to kill the child.
+
 ## Composition and ownership
 
 The package entry point exports the client; the executable starts the adapter.
 They share contract definitions. There is no shared service or durable state.
 Every request supplies its own evidence.
 
+Keep the implementation in a few focused modules: shared schemas/types, safe
+errors, client evaluation, and MCP startup. `src/index.ts` exports the client,
+public types and `JevError`; it never imports the startup module or MCP SDK. The
+adapter calls those public exports and imports shared schemas for registration,
+without reimplementing their rules. Internal helpers need no exported subpaths,
+transport options or provider abstraction.
+
+Build ESM JavaScript and declarations into `dist`. The package root export points
+to the API and its types; `bin.jev-mcp` points to the built startup entry with a
+Node shebang. Keep Zod and the MCP SDK as runtime dependencies and test tooling
+as development dependencies. The packed artifact must contain every referenced
+built module and install its dependencies; it must not rely on TypeScript source,
+a source runner or workspace-relative imports. Keep the package private and do
+not publish it in this increment.
+
 Consumers construct questions, select evidence, interpret answers and own actions.
 Their stage names, model ladders, thresholds, fallback rules and workflow state do
 not belong here. Consumer context is provider input, never executable host code.
+
+## Verification seams
+
+Apply the boundary checks in [development](development.md#test-boundaries).
+Client tests control fetch in the test process. Stdio and packed-consumer tests
+launch the actual built executable with a test-only Node preload that intercepts
+the fixed provider URL and routes it to a controlled loopback fixture server.
+Keep native fetch and AbortSignal behavior for headers and body reading. Reject
+unexpected network destinations, use synthetic credentials and copy the preload
+into the temporary consumer for the installed-command check. The preload is test
+infrastructure, never part of the package or a production environment option.
+
+Share sanitized provider fixtures between API and MCP parity tests. Exercise the
+full validation/failure matrix at the client boundary, and protocol formatting,
+representative parity, startup and cancellation/EOF behavior through stdio. Test
+the installed root exports and declarations from a clean temporary consumer and
+initialize/call the installed executable there. This verifies the deliverable
+without adding configurable endpoints, public transport injection or live access
+to default validation. An opt-in live smoke remains the separate compatibility
+check described in the development guide.

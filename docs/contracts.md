@@ -4,6 +4,14 @@ This document specifies the first implementation. The
 [TypeSafe API reference](https://docs.typesafe.ai/api) owns provider wire schemas.
 Use its documented System One endpoint and bearer authentication.
 
+## Consumer journey
+
+A TypeScript application imports the package, supplies credentials, submits
+questions sharing one state and receives structured judgments or a safe error.
+An MCP host supplies credentials through its environment, launches `jev-mcp`,
+discovers `ask_jev` and submits the same request. Both consumers interpret the
+answers and decide what action to take; the package supplies no decision policy.
+
 ## TypeScript API
 
 Export `createJevClient(options)` returning a client with
@@ -72,3 +80,50 @@ does not authorize bypassing required workflow steps.
 An MCP host launches the built executable and inherits the provider key from its
 environment. TypeScript consumers import the package root and pass credentials
 explicitly. Examples use synthetic context and environment references, never keys.
+
+## Acceptance examples
+
+These examples apply to the contracts above. Provider responses use the linked
+wire schemas; the descriptions below illustrate observable outcomes rather than
+introducing another request or response format.
+
+- **All modes and batching:** Given synthetic state describing a document, submit
+  a choice question with `keep`/`revise` alternatives, a score question with three
+  ordered rubric descriptions and a noul question asking whether it is relevant.
+  One provider request carries all three question IDs and the configured model.
+  With a valid response, the result preserves model, IDs, labels, probabilities,
+  confidence, score legend and token usage. A noul value of `0.73` remains `0.73`.
+- **Invalid requests:** An empty questions map, a choice with 256 options or a
+  score with 11 rubric entries rejects with `invalid_input` without a provider
+  request. A score with two valid rubric entries is accepted. Valid string,
+  object and array state values are accepted without coercion.
+- **Configuration and imports:** Importing the package and creating a valid
+  client makes no network request. An empty API key or a nonpositive or nonfinite
+  timeout is rejected before evaluation. Omitting model and timeout uses
+  `jev-1.13.0` and 10000 ms.
+- **Response validation:** If the batch response omits the score answer, returns
+  the wrong answer type, selects a choice label outside `keep`/`revise`, or returns
+  a noul value outside 0–1, evaluation rejects with `invalid_response`. Valid
+  responses with compatible extra fields or floating-point probability sums
+  slightly different from one remain acceptable; provider values are preserved.
+- **Provider failures:** HTTP 422 yields `invalid_input`; 401 and 403 yield
+  `authentication`; 429 yields `rate_limited`; HTTP 500 and a network failure yield
+  `unavailable`. Malformed JSON in an HTTP success yields `invalid_response`.
+  HTTP errors retain their status, and none causes an automatic second call.
+- **Bounded calls:** A response whose headers arrive but whose body stalls past
+  the configured timeout rejects with `timeout`. Caller cancellation before that
+  deadline rejects with `cancelled` instead. Neither outcome triggers a retry or
+  fallback request.
+- **Safe failures:** With a synthetic key, state and question text that are
+  recognizable in a controlled failure response, error messages and diagnostics
+  contain none of those values or the raw provider body.
+- **MCP equivalence:** A host initializes stdio and discovers exactly one tool,
+  `ask_jev`. Calling it with choice, score and noul questions sharing one state
+  and a provider fixture also used for the API produces the same result as
+  structured content and JSON text. A provider 429
+  produces an MCP tool error with the API's safe `rate_limited` code/message.
+  Tool arguments cannot supply credentials, an endpoint or a local file path.
+- **MCP lifecycle:** Missing `JEV_API_KEY` or an invalid `JEV_TIMEOUT_MS` causes a
+  clear, secret-free startup failure. Cancelling an outstanding tool call cancels
+  its provider call; closing the connection aborts outstanding calls. Successful
+  operation and failures leave stdout containing only protocol messages.
