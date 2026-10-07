@@ -19,7 +19,8 @@ Export `createJevClient(options)` returning a client with
 `JevError`. Creating a client performs no network request.
 
 Options: required nonempty `apiKey`; optional `model` (default `jev-1.13.0`) and
-positive finite `timeoutMs` (default 10000). The endpoint is fixed to
+positive finite `timeoutMs` (default 10000), plus optional `usageLog` as defined
+under [local usage logging](#local-usage-logging). The endpoint is fixed to
 `https://api.typesafe.ai/v1/systemone`. Applications supply credentials explicitly.
 
 Requests contain `state` and a nonempty `questions` map. State and instructions
@@ -62,9 +63,10 @@ retries or fallback calls initially; consumers own those policies.
 ## MCP
 
 Provide a `jev-mcp` executable using stdio transport. Read `JEV_API_KEY`, optional
-`JEV_MODEL` and `JEV_TIMEOUT_MS`, and create the client once. Invalid configuration
-fails startup clearly without exposing secrets. Do not accept keys, endpoints or
-local file paths as tool arguments.
+`JEV_MODEL`, `JEV_TIMEOUT_MS` and the optional host logging settings defined
+[below](#configuration-and-record-format), and create the client once. Invalid
+configuration fails startup clearly without exposing secrets. Do not accept keys,
+endpoints or local file paths as tool arguments.
 
 Expose one `ask_jev` tool. Input is the API's state/questions request. Return the
 API result as structured content, with JSON text for text-only clients. Tool
@@ -72,6 +74,7 @@ errors use MCP's error mechanism and the same safe code/message; protocol input
 errors follow the SDK. Propagate cancellation to the client. Declare accurately
 that it sends supplied evidence to TypeSafe and may append a local usage log when
 the host enables logging. Tool arguments cannot enable logging or select its path.
+Discovery sets `readOnlyHint` to false when logging is enabled and true otherwise.
 
 Tool guidance: narrow questions, explicit alternatives, only relevant evidence,
 and batching for shared state. JEv provides judgments, not code or prose answers.
@@ -128,6 +131,61 @@ MCP protocol compatibility; judgments and consumer decision policy stay the same
 
 Only local usage records are in scope. No dashboard, analytics service, database,
 rotation framework or Nexus workflow changes are part of this feature.
+
+### Configuration and record format
+
+Add `usageLog?: JevUsageLogOptions` to `JevClientOptions`, and export this type
+from the package root:
+
+```ts
+interface JevUsageLogOptions {
+  path: string;
+  caller?: string;
+}
+```
+
+Supplying `usageLog` enables logging; omitting it disables logging. The path must
+be a nonempty string without NUL characters, and a supplied caller must be a
+nonempty string. Invalid options reject client construction with the existing
+safe `invalid_input` error. Snapshot these settings at construction, resolving
+relative paths against the working directory then. Do not read environment
+variables in the client or introduce a default destination.
+
+For MCP, `JEV_USAGE_LOG_PATH` enables logging and selects the file;
+`JEV_USAGE_LOG_CALLER` optionally supplies the label. Without a path setting,
+logging is disabled and the label setting has no effect. An empty path setting
+is invalid configuration rather than a request for a default. The adapter maps
+these strings to the same client options and retains its safe startup diagnostics.
+
+The host supplies an existing parent directory. The first logged evaluation may
+create the file; append never truncates it. New files use mode `0600` subject to
+the host's umask; existing permissions are unchanged. Logging is best effort,
+not a complete audit trail. Each client serializes its own appends; hosts should
+use a separate file for independent clients/processes because cross-writer
+locking and transactional writes are outside this feature. Completion order,
+rather than invocation order, determines record order. A call settles after its
+append attempt, so ordinary callers can read the record after awaiting it;
+logging latency is outside the provider deadline and the recorded duration.
+
+JSONL uses UTF-8, one compact JSON object followed by a newline. The record has
+only these fields; success and failure have mutually exclusive outcome fields:
+
+| Field        | Content and presence                                                                                                                                   |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `timestamp`  | Evaluation start as a UTC ISO 8601 string. Always present.                                                                                             |
+| `durationMs` | Nonnegative elapsed evaluation time measured with a monotonic clock, excluding logging. Always present.                                                |
+| `model`      | Returned model on success; configured model on failure. Always present.                                                                                |
+| `questions`  | The validated request snapshot's questions, including original IDs, instructions and criteria. Omitted if request validation produced no snapshot.     |
+| `answers`    | The public result's answers, on success only.                                                                                                          |
+| `usage`      | The public result's available token usage, on success only. No fabricated values; the current successful result schema requires usage.                 |
+| `errorCode`  | The existing safe `JevError.code`, on failure only. An unexpected non-`JevError` uses `unavailable` in the record without changing the thrown failure. |
+| `caller`     | Explicitly configured label, when supplied.                                                                                                            |
+
+Build records by selecting these fields, never by serializing a whole request,
+result, configuration or error and removing secrets afterward. Preserve arbitrary
+own question/answer keys and JSON content exactly as in the validated snapshot
+and public result. No state, headers, error messages, HTTP bodies or extra provider
+properties enter the log.
 
 ## Acceptance examples
 

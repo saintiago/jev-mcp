@@ -61,6 +61,15 @@ or shutdown operation. Each `evaluate` call owns its resources independently:
 5. Return the validated result or a `JevError`. In `finally`, clear the timer and
    remove the caller listener on every path.
 
+When logging is enabled, an outer per-call boundary captures start time before
+step 1, retains the snapshot if validation succeeds, and observes the result or
+failure. After evaluation cleanup, it records elapsed time and attempts one append
+before settling with the original result or error. This boundary includes local
+validation and already-cancelled calls, which currently exit before the network
+`try/finally`; do not instrument only the fetch path. Obtain one request snapshot
+and share it with provider serialization, result checks and log projection instead
+of parsing twice. The disabled path needs no logging work.
+
 The recorded abort source distinguishes `timeout` from `cancelled`, including
 when cancellation interrupts the body read. Error categorization is owned here,
 as specified by [contracts](contracts.md#failures); neither native error messages,
@@ -69,6 +78,34 @@ Retain the HTTP status when known. The optional local usage log follows
 [contracts](contracts.md#local-usage-logging); it must not change evaluation results.
 Credentials stay in client configuration and the Authorization header. Supplied
 state exists only in the call and its provider payload, never in the usage log.
+
+### Local usage writer
+
+The client owns the opt-in behavior and record projection; a small private
+`src/usage-log.ts` helper owns JSONL serialization and file append. The public
+configuration and record fields belong to
+[contracts](contracts.md#configuration-and-record-format). Validate and copy
+logging options with the other client options, without checking the filesystem
+or opening a file during construction. Neither writer nor client reads environment.
+
+Project only the validated questions and allowed result/error fields into a
+record. The writer receives that record and the selected path, never the full
+request, credentials, headers, provider response or raw exception. Serialize the
+record before queueing, so pending appends retain only the allowed JSON line and
+cannot observe caller mutation. Do not retain supplied state in client-level or
+writer-level state. Use wall time for the start timestamp and a monotonic clock
+for elapsed evaluation time.
+
+Use native `node:fs/promises` append with UTF-8, append mode and mode `0600` for
+new files. Keep a single promise tail per client to serialize its appends; a
+failed append is contained so later calls can still write. Await the attempt only
+after provider resources have been released. Contain record construction,
+serialization and I/O failures without changing the evaluation result or original
+error. Write no logging diagnostics to stdout or stderr. Do not create parent
+directories, retry, rotate files, keep open handles or add a flush/shutdown API.
+This needs no dependency, shared service, global path registry or logger framework.
+Cross-client/process locking is outside the single-writer usage documented in
+the contract; independent hosts can choose separate files.
 
 ## MCP adapter
 
@@ -95,6 +132,14 @@ tool result containing its safe code/message and status when present. Unexpected
 failures receive a fixed safe message; protocol input failures remain with the
 SDK. Diagnostics must not print raw exceptions or configuration values.
 
+Map the host's usage-log environment settings to the public client options at
+startup. The adapter neither builds records nor writes them. Keep `ask_jev` input
+and output schemas unchanged; logging paths and attribution never become tool
+arguments or provider payload fields. Replace the unconditional no-local-file-write
+description with the optional host-enabled usage write and set `readOnlyHint`
+according to host enablement. Update the existing discovery assertions together
+with this description and annotation, preserving disabled-mode behavior.
+
 Use the SDK's request cancellation and connection-close abort behavior instead
 of maintaining a parallel collection of in-flight requests. The executable must
 connect stdin EOF and termination signals to one idempotent server-close path;
@@ -112,9 +157,10 @@ The adapter uses the public client's logging capability so one evaluation produc
 one record. Consumers supply any caller label; the package owns no identity system.
 
 Keep the implementation in a few focused modules: shared schemas/types, safe
-errors, client evaluation, and MCP startup. `src/index.ts` exports the client,
-public types and `JevError`; it never imports the startup module or MCP SDK. The
-adapter calls those public exports and imports shared schemas for registration,
+errors, client evaluation, the private usage writer, and MCP startup.
+`src/index.ts` exports the client, public types and `JevError`; it never imports
+the startup module or MCP SDK. The adapter calls those public exports and imports
+shared schemas for registration,
 without reimplementing their rules. Internal helpers need no exported subpaths,
 transport options or provider abstraction.
 
