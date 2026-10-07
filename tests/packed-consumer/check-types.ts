@@ -11,6 +11,7 @@ import type {
   JevResult,
   JevScoreQuestion,
   JevUsage,
+  JevUsageLogOptions,
 } from '@saintiago/jev';
 
 const choice: JevChoiceQuestion = {
@@ -43,7 +44,11 @@ const request: JevRequest = {
   },
 };
 
-const options: JevClientOptions = { apiKey: 'synthetic-api-key' };
+const usageLog: JevUsageLogOptions = {
+  path: 'usage.jsonl',
+  caller: 'review-agent',
+};
+const options: JevClientOptions = { apiKey: 'synthetic-api-key', usageLog };
 const client: JevClient = createJevClient(options);
 const evaluateOptions: JevEvaluateOptions = {
   signal: new AbortController().signal,

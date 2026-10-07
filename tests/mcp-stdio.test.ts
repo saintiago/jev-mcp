@@ -1,4 +1,8 @@
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import type { IncomingHttpHeaders, Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createJevClient } from '../src/index.js';
 import type { JevRequest, JevResult } from '../src/index.js';
@@ -74,6 +78,13 @@ const soleProtoResponse: JevResult = {
 
 const sessions: McpSession[] = [];
 const servers: Server[] = [];
+const usageDirs: string[] = [];
+
+async function tempUsageDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'jev-mcp-usage-'));
+  usageDirs.push(dir);
+  return dir;
+}
 
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -85,6 +96,12 @@ afterEach(async () => {
     const server = servers.pop();
     if (server !== undefined) {
       await stopLoopbackServer(server);
+    }
+  }
+  while (usageDirs.length > 0) {
+    const dir = usageDirs.pop();
+    if (dir !== undefined) {
+      await rm(dir, { recursive: true, force: true });
     }
   }
 });
@@ -186,6 +203,26 @@ describe('stdio startup configuration', () => {
       expect(session.stdoutLines).toEqual([]);
     }
   });
+
+  it('rejects an empty JEV_USAGE_LOG_PATH and ignores the caller label without a path', async () => {
+    const session = await startSession({
+      usePreload: false,
+      env: { JEV_API_KEY: SYNTHETIC_KEY, JEV_USAGE_LOG_PATH: '' },
+    });
+    const exit = await session.waitForExit();
+    expect(exit).toEqual({ code: 1, signal: null });
+    expect(session.stderr).toContain('JEV_USAGE_LOG_PATH');
+    expect(session.stderr).not.toContain(SYNTHETIC_KEY);
+    expect(session.stdoutLines).toEqual([]);
+
+    const labelOnly = await startSession({
+      usePreload: false,
+      env: { JEV_API_KEY: SYNTHETIC_KEY, JEV_USAGE_LOG_CALLER: 'ghost' },
+    });
+    await labelOnly.initialize();
+    const { tools } = await labelOnly.listTools();
+    expect(tools[0]?.annotations?.readOnlyHint).toBe(true);
+  });
 });
 
 describe('stdio tool contract', () => {
@@ -201,7 +238,8 @@ describe('stdio tool contract', () => {
     const description = String(tool.description);
     for (const guidance of [
       'TypeSafe',
-      'does not modify local files',
+      'usage logging',
+      'local JSONL usage record',
       'narrow questions',
       'explicit alternatives',
       'relevant evidence',
@@ -502,6 +540,128 @@ describe('stdio failures and cancellation', () => {
     const { tools } = await session.listTools();
     expect(tools).toHaveLength(1);
     expect(session.exited).toBeUndefined();
+  }, 15000);
+});
+
+describe('stdio usage logging', () => {
+  it('advertises the host-enabled usage write as a non-read-only tool', async () => {
+    const dir = await tempUsageDir();
+    const path = join(dir, 'usage.jsonl');
+    const session = await startSession({
+      env: {
+        JEV_API_KEY: SYNTHETIC_KEY,
+        JEV_USAGE_LOG_PATH: path,
+        JEV_USAGE_LOG_CALLER: 'mcp-agent',
+      },
+    });
+    await session.initialize();
+
+    const { tools } = await session.listTools();
+    expect(tools).toHaveLength(1);
+    const tool = tools[0]!;
+    expect(String(tool.description)).toContain(
+      'appends one local JSONL usage record per evaluation',
+    );
+    expect(tool.annotations?.readOnlyHint).toBe(false);
+    expect(existsSync(path)).toBe(false);
+    expect(session.stdoutAsProtocolOnly()).toBe(true);
+  }, 15000);
+
+  it('writes one client-owned record per evaluation without duplicating or changing results', async () => {
+    const dir = await tempUsageDir();
+    const path = join(dir, 'usage.jsonl');
+    await writeFile(path, '{"existing":true}\n');
+    let call = 0;
+    const { server, origin } = await startLoopbackServer(
+      (_request, response) => {
+        call += 1;
+        if (call === 1) {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify(batchResponse));
+          return;
+        }
+        response.writeHead(429, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ detail: PROVIDER_STATE_TEXT }));
+      },
+    );
+    servers.push(server);
+
+    const session = await startSession({
+      providerOrigin: origin,
+      env: {
+        JEV_API_KEY: SYNTHETIC_KEY,
+        JEV_USAGE_LOG_PATH: path,
+        JEV_USAGE_LOG_CALLER: 'mcp-agent',
+      },
+    });
+    await session.initialize();
+
+    const succeeded = await session.callTool(batchRequest).response;
+    expect(succeeded.isError).toBeFalsy();
+    expect(succeeded.structuredContent).toEqual(batchResponse);
+
+    const failed = await session.callTool(batchRequest).response;
+    expect(failed.isError).toBe(true);
+    expect(textContent(failed)).toContain('rate_limited');
+
+    const lines = (await readFile(path, 'utf8')).split('\n').filter(Boolean);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toBe('{"existing":true}');
+    const success = JSON.parse(lines[1] ?? '') as Record<string, unknown>;
+    expect(success.questions).toEqual(batchRequest.questions);
+    expect(success.answers).toEqual(batchResponse.answers);
+    expect(success.usage).toEqual(batchResponse.usage);
+    expect(success.model).toBe(batchResponse.model);
+    expect(success.caller).toBe('mcp-agent');
+    expect(success.errorCode).toBeUndefined();
+    const failure = JSON.parse(lines[2] ?? '') as Record<string, unknown>;
+    expect(failure.errorCode).toBe('rate_limited');
+    expect(failure.model).toBe('jev-1.13.0');
+    expect(failure.questions).toEqual(batchRequest.questions);
+    expect(failure.answers).toBeUndefined();
+    const content = await readFile(path, 'utf8');
+    expect(content).not.toContain(PROVIDER_STATE_TEXT);
+    expect(content).not.toContain(SYNTHETIC_KEY);
+    expect(session.stdoutAsProtocolOnly()).toBe(true);
+    expect(session.stderr).not.toContain(SYNTHETIC_KEY);
+  }, 15000);
+
+  it('keeps MCP results and safe errors when the usage destination cannot be written', async () => {
+    const dir = await tempUsageDir();
+    const path = join(dir, 'missing', 'usage.jsonl');
+    let call = 0;
+    const { server, origin } = await startLoopbackServer(
+      (_request, response) => {
+        call += 1;
+        if (call === 1) {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify(batchResponse));
+          return;
+        }
+        response.writeHead(429, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ detail: PROVIDER_STATE_TEXT }));
+      },
+    );
+    servers.push(server);
+
+    const session = await startSession({
+      providerOrigin: origin,
+      env: { JEV_API_KEY: SYNTHETIC_KEY, JEV_USAGE_LOG_PATH: path },
+    });
+    await session.initialize();
+
+    const succeeded = await session.callTool(batchRequest).response;
+    expect(succeeded.isError).toBeFalsy();
+    expect(succeeded.structuredContent).toEqual(batchResponse);
+
+    const failed = await session.callTool(batchRequest).response;
+    expect(failed.isError).toBe(true);
+    expect(textContent(failed)).toContain('rate_limited');
+
+    expect(existsSync(path)).toBe(false);
+    expect(session.stdoutAsProtocolOnly()).toBe(true);
+    expect(session.stderr).not.toContain(SYNTHETIC_KEY);
+    expect(session.stderr).not.toContain(path);
   }, 15000);
 });
 
