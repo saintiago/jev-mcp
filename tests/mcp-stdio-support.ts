@@ -14,6 +14,7 @@ export const MCP_PRELOAD = fileURLToPath(
 
 export interface McpSessionOptions {
   providerOrigin?: string;
+  cwd?: string;
   env?: Record<string, string>;
   usePreload?: boolean;
   /** Executable to launch; defaults to the built dist/mcp.js. */
@@ -128,6 +129,7 @@ export class McpSession {
     }
     const child = spawn(command, args, {
       env,
+      ...(options.cwd && { cwd: options.cwd }),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     await new Promise<void>((resolve, reject) => {
@@ -221,12 +223,12 @@ export class McpSession {
   callTool(
     args: unknown,
     timeoutMs = 5000,
+    name = 'inspect_files',
   ): { id: number; response: Promise<McpCallToolResult> } {
-    return this.send(
-      'tools/call',
-      { name: 'ask_jev', arguments: args },
-      timeoutMs,
-    ) as { id: number; response: Promise<McpCallToolResult> };
+    return this.send('tools/call', { name, arguments: args }, timeoutMs) as {
+      id: number;
+      response: Promise<McpCallToolResult>;
+    };
   }
 
   cancel(id: number, reason: string): void {

@@ -32,6 +32,8 @@ export interface JevClientOptions {
 }
 
 export interface JevEvaluateOptions {
+  /** Omit question text from usage logs when false. Defaults to true. */
+  logQuestions?: boolean;
   signal?: AbortSignal;
 }
 
@@ -160,7 +162,7 @@ async function evaluateRequest(
       timestamp: startedAt.toISOString(),
       durationMs: elapsedMs(startTime),
       model: result.model,
-      questions: snapshot.questions,
+      ...(options?.logQuestions !== false && { questions: snapshot.questions }),
       answers: result.answers,
       usage: result.usage,
       ...(usageLog.caller !== undefined && { caller: usageLog.caller }),
@@ -171,7 +173,8 @@ async function evaluateRequest(
       timestamp: startedAt.toISOString(),
       durationMs: elapsedMs(startTime),
       model: config.model,
-      ...(snapshot !== undefined && { questions: snapshot.questions }),
+      ...(snapshot !== undefined &&
+        options?.logQuestions !== false && { questions: snapshot.questions }),
       errorCode: error instanceof JevError ? error.code : 'unavailable',
       ...(usageLog.caller !== undefined && { caller: usageLog.caller }),
     });

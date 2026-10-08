@@ -22,3 +22,17 @@ export type {
 export { JevError } from './errors.js';
 export type { JevErrorCode } from './errors.js';
 export type { JevUsageLogOptions } from './usage-log.js';
+
+export { createRepositoryClient } from './repository.js';
+export type { RepositoryClient } from './repository.js';
+export type {
+  SearchRepoRequest,
+  SearchRepoResult,
+  InspectFilesRequest,
+  InspectFilesResult,
+  RepositorySource,
+  RepositoryCoverage,
+  RepositoryUsage,
+  FileAssessment,
+  SkippedFile,
+} from './repository-contracts.js';
