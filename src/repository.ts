@@ -206,7 +206,9 @@ export function createRepositoryClient(
           (error.code === 'timeout' ||
             error.code === 'rate_limited' ||
             (error.code === 'unavailable' &&
-              (error.status === undefined || error.status >= 500)));
+              (error.status === undefined ||
+                (error.status >= 200 && error.status < 300) ||
+                error.status >= 500)));
         if (attempt !== 0 || !retryable) throw error;
         try {
           await delay(250 + Math.floor(Math.random() * 250), undefined, {

@@ -263,6 +263,7 @@ describe('repository transient failures', () => {
     new JevError('timeout'),
     new JevError('rate_limited', 429),
     new JevError('unavailable', 529),
+    new JevError('unavailable', 200),
     new JevError('unavailable'),
   ]) {
     it(
@@ -427,4 +428,38 @@ describe('repository transient failures', () => {
     ).rejects.toMatchObject({ code: 'cancelled' });
     expect(evaluate).toHaveBeenCalledTimes(1);
   });
+});
+
+it('retries a connection drop while reading a successful HTTP response', async () => {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => {
+        throw new TypeError('terminated');
+      },
+    })
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          model: 'jev-1.13.0',
+          answers: { q0: { type: 'noul', noul: 0.92 } },
+          usage: { input_tokens: 10, output_tokens: 2 },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      ),
+    );
+  vi.stubGlobal('fetch', fetchMock);
+  const repo = createRepositoryClient(
+    createJevClient({ apiKey: 'synthetic' }),
+    root,
+  );
+  const result = await repo.inspectFiles({
+    paths: ['camera.ts'],
+    questions: [{ id: 'x', question: 'Does this acquire the camera?' }],
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(result.coverage.complete).toBe(true);
+  expect(result.files[0]?.assessments[0]?.assessment).toBe('evidence');
 });
