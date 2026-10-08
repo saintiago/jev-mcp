@@ -2,22 +2,18 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { jevResultSchema, jevToolRequestSchema } from './contracts.js';
+import {
+  searchRepoSchema,
+  inspectFilesSchema,
+} from './repository-contracts.js';
+import { createRepositoryClient } from './repository.js';
 import { createJevClient, JevError } from './index.js';
 import type { JevClient, JevUsageLogOptions } from './index.js';
 
 const SERVER_NAME = 'jev-mcp';
 const SERVER_VERSION = '0.0.0';
-const TOOL_NAME = 'ask_jev';
 const UNEXPECTED_FAILURE =
-  'The evaluation failed unexpectedly. No request details were reported.';
-const TOOL_DESCRIPTION = [
-  'Ask TypeSafe JEv for structured judgments about supplied evidence.',
-  'The tool sends the state and questions to the TypeSafe JEv API and, when the host enables usage logging, appends one local JSONL usage record per evaluation; otherwise it writes no local files.',
-  'Ask narrow questions with explicit alternatives, supply only relevant evidence and batch related questions that share one state.',
-  'JEv provides judgments, not code or prose answers; use deterministic tools for arithmetic, counting and executable checks.',
-  'Confidence describes the provider distribution and does not authorize bypassing required workflow steps.',
-].join(' ');
+  'Repository inspection failed. No source or credential details were reported.';
 
 class StartupError extends Error {}
 
@@ -85,32 +81,46 @@ function failureResult(error: JevError): CallToolResult {
 
 function createServer(client: JevClient, loggingEnabled: boolean): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+  const repository = createRepositoryClient(client, process.cwd());
+  const annotations = { readOnlyHint: !loggingEnabled, openWorldHint: true };
+  async function respond(
+    operation: () => Promise<object>,
+  ): Promise<CallToolResult> {
+    try {
+      const result = await operation();
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result) }],
+        structuredContent: result as Record<string, unknown>,
+      };
+    } catch (error) {
+      if (error instanceof JevError) return failureResult(error);
+      return {
+        content: [{ type: 'text', text: UNEXPECTED_FAILURE }],
+        isError: true,
+      };
+    }
+  }
   server.registerTool(
-    TOOL_NAME,
+    'search_repo',
     {
-      title: 'Ask JEv',
-      description: TOOL_DESCRIPTION,
-      inputSchema: jevToolRequestSchema,
-      outputSchema: jevResultSchema,
-      annotations: { readOnlyHint: !loggingEnabled, openWorldHint: true },
+      description:
+        'Find relevant repository files without loading source into agent context. Exact symbols/literals use text search; conceptual queries use JEv candidate screening and whole-file judgments. Returns paths, scores, source state and incomplete coverage. Read selected whole files yourself. Source is sent to TypeSafe; optional host usage logging writes sanitized metadata. No generated reasons, excerpts or modifications.',
+      inputSchema: searchRepoSchema,
+      annotations,
     },
-    async (request, extra) => {
-      try {
-        const result = await client.evaluate(request, { signal: extra.signal });
-        return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-          structuredContent: result,
-        };
-      } catch (error) {
-        if (error instanceof JevError) {
-          return failureResult(error);
-        }
-        return {
-          content: [{ type: 'text', text: UNEXPECTED_FAILURE }],
-          isError: true,
-        };
-      }
+    (request, extra) =>
+      respond(() => repository.searchRepo(request, { signal: extra.signal })),
+  );
+  server.registerTool(
+    'inspect_files',
+    {
+      description:
+        'Judge bounded questions against specified whole repository files without loading their contents into agent context. Returns typed per-file scores and the supplied criteria, with coverage and skipped files. Negative assessments do not prove absence or bug freedom. Source is sent to TypeSafe; optional host usage logging writes sanitized metadata. No generated prose or modifications.',
+      inputSchema: inspectFilesSchema,
+      annotations,
     },
+    (request, extra) =>
+      respond(() => repository.inspectFiles(request, { signal: extra.signal })),
   );
   return server;
 }

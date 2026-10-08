@@ -52,6 +52,7 @@ describe('module and configuration', () => {
       expect(Object.keys(module).sort()).toEqual([
         'JevError',
         'createJevClient',
+        'createRepositoryClient',
       ]);
       expect(typeof client.evaluate).toBe('function');
       expect(constructionReads).toEqual([]);
