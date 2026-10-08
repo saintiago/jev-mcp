@@ -117,17 +117,19 @@ export function createRepositoryClient(
   ): Promise<File | null> {
     if (options.signal?.aborted) throw new JevError('cancelled');
     const full = await resolveInside(root, name);
-    try {
-      await run('git', ['check-ignore', '-q', '--', name], {
-        cwd: root,
-        ...(options.signal && { signal: options.signal }),
-      });
-      skipped.push({ path: name, reason: 'ignored' });
-      return null;
-    } catch (error) {
-      if (options.signal?.aborted) throw new JevError('cancelled');
-      if ((error as { code?: unknown }).code !== 1)
-        throw new JevError('unavailable');
+    for (const candidate of new Set([name, path.relative(root, full)])) {
+      try {
+        await run('git', ['check-ignore', '-q', '--', candidate], {
+          cwd: root,
+          ...(options.signal && { signal: options.signal }),
+        });
+        skipped.push({ path: name, reason: 'ignored' });
+        return null;
+      } catch (error) {
+        if (options.signal?.aborted) throw new JevError('cancelled');
+        if ((error as { code?: unknown }).code !== 1)
+          throw new JevError('unavailable');
+      }
     }
     try {
       if (!(await stat(full)).isFile()) {
@@ -187,7 +189,10 @@ export function createRepositoryClient(
     usage: RepositoryUsage,
     options: JevEvaluateOptions,
   ): Promise<JevResult> {
-    const r = await client.evaluate({ state, questions }, options);
+    const r = await client.evaluate(
+      { state, questions },
+      { ...options, logQuestions: false },
+    );
     usage.calls++;
     usage.input_tokens += r.usage.input_tokens;
     usage.output_tokens += r.usage.output_tokens;
