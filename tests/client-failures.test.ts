@@ -126,7 +126,7 @@ describe('bounded calls', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('uses a 10000 ms default timeout', async () => {
+  it('uses a 30000 ms default timeout', async () => {
     vi.useFakeTimers();
     const fetchMock = stubFetch(stallingFetch());
     const client = createJevClient({ apiKey: 'synthetic-key' });
@@ -141,7 +141,7 @@ describe('bounded calls', () => {
       },
     );
 
-    await vi.advanceTimersByTimeAsync(9999);
+    await vi.advanceTimersByTimeAsync(29999);
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await outcome;

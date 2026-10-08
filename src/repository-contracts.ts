@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { JevErrorCode } from './errors.js';
 const questionSchema = z.strictObject({
   id: z.string().min(1).max(100),
   question: z.string().min(1).max(4000),
@@ -31,7 +32,9 @@ export interface SkippedFile {
     | 'unreadable'
     | 'binary'
     | 'too_large'
-    | 'inventory_limit';
+    | 'inventory_limit'
+    | 'evaluation_failed';
+  errorCode?: JevErrorCode;
 }
 export interface RepositoryCoverage {
   filesDiscovered: number;

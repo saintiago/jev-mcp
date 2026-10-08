@@ -21,7 +21,7 @@ These labels describe assessments of supplied evidence, not established correctn
 
 Both tools return source state (HEAD, dirty working tree flag, digest of files actually read),
 coverage (discovered/read/inspected counts, completeness, skipped files) and aggregate provider
-usage. They return no generated explanations or source excerpts. A digest identifies read
+usage (attempt count includes failures/retries; token counts include successful responses only). They return no generated explanations or source excerpts. A digest identifies read
 content, not an atomic repository snapshot. Candidate filtering explicitly limits completeness.
 
 Use Git's tracked and nonignored untracked inventory, including nonignored hidden files. At most
@@ -29,6 +29,14 @@ Use Git's tracked and nonignored untracked inventory, including nonignored hidde
 larger than 128000 bytes are skipped, never silently truncated. Ignored inspection paths are
 reported as skipped. Missing/non-directory scope is invalid input. An empty scope returns an
 empty result. Tools never execute source or accept shell commands.
+
+Repository evaluations retry once after a randomized 250–499ms delay for timeout, rate limiting,
+network unavailability or HTTP 5xx. Concurrency remains four. A second provider failure is reported
+per affected file as `evaluation_failed` with its safe `errorCode`; successful evaluations remain in
+the result and coverage is incomplete. Failed candidate batches report every affected path and do
+not receive a negative score. Authentication, invalid input and cancellation still fail the call.
+Invalid provider responses are reported as failed evaluations without retrying. There is no fallback
+model. The low-level transport itself does not retry.
 
 ## MCP startup and lifecycle
 
@@ -43,7 +51,7 @@ Optional usage logs contain metadata, never raw source, queries or credentials.
 
 `createJevClient(options).evaluate(request, {signal}?)` is the independent low-level transport.
 It supports typed noul, choice and score questions at the fixed TypeSafe System One endpoint,
-using bearer authentication. Defaults: `jev-1.13.0`, 10000ms per provider request. Validate
+using bearer authentication. Defaults: `jev-1.13.0`, 30000ms per provider request. Validate
 request/response shapes, preserve provider values, and use safe `JevError` categories for
 invalid input/response, authentication, rate limiting, timeout, cancellation and unavailability.
 There are no automatic retries or fallback models. The repository tools use noul judgments.

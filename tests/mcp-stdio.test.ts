@@ -112,8 +112,21 @@ describe('repository tools over stdio', () => {
       paths: ['camera.ts'],
       questions: [{ id: 'x', question: 'Is it relevant?' }],
     }).response;
-    expect(error.isError).toBe(true);
-    expect(textContent(error)).toContain('rate_limited');
+    expect(error.isError).not.toBe(true);
+    expect(JSON.parse(textContent(error))).toMatchObject({
+      files: [],
+      coverage: {
+        complete: false,
+        skipped: [
+          {
+            path: 'camera.ts',
+            reason: 'evaluation_failed',
+            errorCode: 'rate_limited',
+          },
+        ],
+      },
+      usage: { calls: 2 },
+    });
     const second = await s.callTool({ query: 'camera' }, 5000, 'search_repo')
       .response;
     expect(second.isError).toBeFalsy();
