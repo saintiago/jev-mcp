@@ -20,7 +20,7 @@ import type {
 
 const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 const DEFAULT_MODEL = 'jev-1.13.0';
-const DEFAULT_TIMEOUT_MS = 10000;
+const DEFAULT_TIMEOUT_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 

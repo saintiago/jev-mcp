@@ -62,6 +62,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   await rm(root, { recursive: true, force: true });
 });
 describe('repository public boundary', () => {
@@ -227,8 +228,16 @@ describe('repository source and usage-log privacy', () => {
                     },
                     { logQuestions: true },
                   );
-            if (fail) await expect(operation).rejects.toBeInstanceOf(JevError);
-            else await operation;
+            const result = await operation;
+            if (fail) {
+              expect(result.files).toEqual([]);
+              expect(result.coverage.complete).toBe(false);
+              expect(
+                result.coverage.skipped.every(
+                  (f) => f.reason === 'evaluation_failed',
+                ),
+              ).toBe(true);
+            }
             const logged = await readFile(logPath, 'utf8');
             expect(logged).not.toContain(marker);
             const records = logged
@@ -247,4 +256,210 @@ describe('repository source and usage-log privacy', () => {
       );
     }
   }
+});
+
+describe('repository transient failures', () => {
+  for (const error of [
+    new JevError('timeout'),
+    new JevError('rate_limited', 429),
+    new JevError('unavailable', 529),
+    new JevError('unavailable', 200),
+    new JevError('unavailable'),
+  ]) {
+    it(
+      'retries once and recovers from ' + error.code + '/' + error.status,
+      async () => {
+        vi.spyOn(Math, 'random').mockReturnValue(0);
+        const original = client.evaluate;
+        let calls = 0;
+        client.evaluate = async (request, options) => {
+          if (++calls === 1) throw error;
+          return original(request, options);
+        };
+        const result = await createRepositoryClient(client, root).inspectFiles({
+          paths: ['camera.ts'],
+          questions: [
+            { id: 'camera', question: 'Does this acquire the camera?' },
+          ],
+        });
+        expect(calls).toBe(2);
+        expect(result.usage).toEqual({
+          calls: 2,
+          input_tokens: 10,
+          output_tokens: 2,
+        });
+        expect(result.coverage.complete).toBe(true);
+        expect(result.files[0]?.assessments[0]?.assessment).toBe('evidence');
+      },
+    );
+  }
+  it('preserves successful files after retry exhaustion without negative assessments', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const original = client.evaluate;
+    let failures = 0;
+    client.evaluate = async (request, options) => {
+      if ((request.state as { path: string }).path === 'other.ts') {
+        failures++;
+        throw new JevError('unavailable', 503);
+      }
+      return original(request, options);
+    };
+    const result = await createRepositoryClient(client, root).inspectFiles({
+      paths: ['camera.ts', 'other.ts'],
+      questions: [{ id: 'x', question: 'Does this acquire the camera?' }],
+    });
+    expect(failures).toBe(2);
+    expect(result.files.map((f) => f.path)).toEqual(['camera.ts']);
+    expect(result.coverage).toMatchObject({
+      filesInspected: 1,
+      complete: false,
+      skipped: [
+        {
+          path: 'other.ts',
+          reason: 'evaluation_failed',
+          errorCode: 'unavailable',
+        },
+      ],
+    });
+    expect(result.usage.calls).toBe(3);
+  });
+  it('preserves search results when a candidate batch fails', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    for (let i = 0; i < 24; i++)
+      await writeFile(
+        path.join(root, 'z' + i.toString().padStart(2, '0') + '.ts'),
+        'export const x = 1;',
+      );
+    const original = client.evaluate;
+    client.evaluate = async (request, options) => {
+      const state = request.state as { candidates?: { path: string }[] };
+      if (state.candidates?.some((c) => c.path === 'z10.ts'))
+        throw new JevError('timeout');
+      return original(request, options);
+    };
+    const result = await createRepositoryClient(client, root).searchRepo({
+      query: 'Where does browser camera acquisition happen?',
+    });
+    expect(result.files.some((f) => f.path === 'camera.ts')).toBe(true);
+    expect(result.coverage.complete).toBe(false);
+    expect(result.coverage.skipped).toHaveLength(12);
+    expect(
+      result.coverage.skipped.every(
+        (f) => f.reason === 'evaluation_failed' && f.errorCode === 'timeout',
+      ),
+    ).toBe(true);
+    expect(result.coverage.skipped.some((f) => f.path === 'z10.ts')).toBe(true);
+  });
+  it('preserves search hits when a whole-file judgment fails', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const original = client.evaluate;
+    client.evaluate = async (request, options) => {
+      if ((request.state as { path?: string }).path === 'other.ts')
+        throw new JevError('timeout');
+      return original(request, options);
+    };
+    const result = await createRepositoryClient(client, root).searchRepo({
+      query: 'Where is camera acquisition implemented?',
+    });
+    expect(result.files.some((f) => f.path === 'camera.ts')).toBe(true);
+    expect(result.coverage.skipped).toContainEqual({
+      path: 'other.ts',
+      reason: 'evaluation_failed',
+      errorCode: 'timeout',
+    });
+    expect(result.coverage.complete).toBe(false);
+  });
+  for (const error of [
+    new JevError('authentication', 401),
+    new JevError('invalid_input', 422),
+    new JevError('cancelled'),
+  ]) {
+    it('propagates ' + error.code + ' without retrying', async () => {
+      const evaluate = vi.fn(async () => {
+        throw error;
+      });
+      client.evaluate = evaluate;
+      await expect(
+        createRepositoryClient(client, root).inspectFiles({
+          paths: ['camera.ts'],
+          questions: [{ id: 'x', question: 'Is this relevant?' }],
+        }),
+      ).rejects.toBe(error);
+      expect(evaluate).toHaveBeenCalledTimes(1);
+    });
+  }
+  it('does not retry malformed responses or permanent unavailable responses', async () => {
+    for (const error of [
+      new JevError('invalid_response'),
+      new JevError('unavailable', 307),
+    ]) {
+      const evaluate = vi.fn(async () => {
+        throw error;
+      });
+      const result = await createRepositoryClient(
+        { evaluate },
+        root,
+      ).inspectFiles({
+        paths: ['camera.ts'],
+        questions: [{ id: 'x', question: 'Is this relevant?' }],
+      });
+      expect(evaluate).toHaveBeenCalledTimes(1);
+      expect(result.files).toEqual([]);
+      expect(result.coverage.skipped[0]).toMatchObject({
+        reason: 'evaluation_failed',
+        errorCode: error.code,
+      });
+    }
+  });
+  it('cancels during retry delay without starting a second evaluation', async () => {
+    const controller = new AbortController();
+    const evaluate = vi.fn(async () => {
+      setTimeout(() => controller.abort(), 10);
+      throw new JevError('timeout');
+    });
+    await expect(
+      createRepositoryClient({ evaluate }, root).inspectFiles(
+        {
+          paths: ['camera.ts'],
+          questions: [{ id: 'x', question: 'Is this relevant?' }],
+        },
+        { signal: controller.signal },
+      ),
+    ).rejects.toMatchObject({ code: 'cancelled' });
+    expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+});
+
+it('retries a connection drop while reading a successful HTTP response', async () => {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => {
+        throw new TypeError('terminated');
+      },
+    })
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          model: 'jev-1.13.0',
+          answers: { q0: { type: 'noul', noul: 0.92 } },
+          usage: { input_tokens: 10, output_tokens: 2 },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      ),
+    );
+  vi.stubGlobal('fetch', fetchMock);
+  const repo = createRepositoryClient(
+    createJevClient({ apiKey: 'synthetic' }),
+    root,
+  );
+  const result = await repo.inspectFiles({
+    paths: ['camera.ts'],
+    questions: [{ id: 'x', question: 'Does this acquire the camera?' }],
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(result.coverage.complete).toBe(true);
+  expect(result.files[0]?.assessments[0]?.assessment).toBe('evidence');
 });
