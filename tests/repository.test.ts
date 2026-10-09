@@ -422,3 +422,21 @@ it('represents an empty full file without inventing a source line', async () => 
     api.expandEvidence({ requests: [{ path: 'empty.txt', start: 1 }] }),
   ).rejects.toMatchObject({ code: 'invalid_input' });
 });
+
+it('bounds dense exact matches without repeatedly rebuilding entire source', async () => {
+  await writeFile(path.join(root, 'dense.txt'), 'hit\n'.repeat(25000));
+  const r = await createRepositoryClient(client, root).retrieveEvidence({
+    scope: 'dense.txt',
+    terms: ['hit'],
+    maxChars: 1000,
+  });
+  expect(r.windows).toEqual([
+    {
+      path: 'dense.txt',
+      start: 1,
+      end: 250,
+      text: Array(250).fill('hit').join('\n'),
+    },
+  ]);
+  expect(r.coverage.limits).toContain('budget');
+}, 2000);
