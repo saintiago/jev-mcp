@@ -1,17 +1,30 @@
 # Development and delivery
 
-Develop in WSL/Linux with Node 24, npm 11 and strict TypeScript ESM.
-Run `npm ci` followed by `npm run validate`: formatting, types, build, provider transport tests,
-repository boundaries, stdio protocol and clean packed consumption. Default checks use controlled
-providers and synthetic credentials, never live paid calls.
+Develop in WSL/Linux with Node 24, npm 11 and strict TypeScript ESM. Run `npm ci` and
+`npm run validate`: formatting, types, build, transport tests, repository evidence boundaries,
+stdio protocol and clean packed consumption. Default tests use controlled providers and synthetic
+credentials, never paid calls.
 
-Repository tests cover discovery, whole-file inspection, zero-provider literal lookup, path and
-ignore boundaries, skipped content, coverage and cancellation. Transport tests own HTTP/schema,
-deadline, cancellation and sanitized logging behavior. Stdio checks own the two-tool catalogue,
-protocol results and lifecycle. Packing checks installed API declarations and the executable.
+Repository tests own exact/semantic discovery, batched retrieval and expansion, fidelity, budgets,
+coverage, confinement, ignore rules, cancellation, failures and retrieval logging. Transport tests
+own HTTP/schema, deadlines and sanitized provider logging. Protocol tests own the replacement tool
+catalogue and lifecycle; packed-consumer tests own installed declarations and executable delivery.
 
-Live checks are explicit and use known repository targets plus no-match queries. Report recall
-limits and provider usage. Do not add production options only to support tests.
+Live experiments compare identical repository revisions and questions, recording answer quality,
+agent input/cached input, elapsed time, calls and expansions separately from provider usage. Report
+limits, missed evidence and fallback reads. Do not claim context savings establish lower total cost.
 
-Repository: saintiago/jev-mcp. Consumer integration and activation belong to Nexus. Follow an
-explicit manual implementation request directly; otherwise use the configured Nexus workflow.
+Repository: saintiago/jev-mcp. Consumer integration belongs to Nexus. Explicit manual implementation
+requests take precedence over the configured Nexus workflow. Installation activation is separate
+from source merge and must preserve the owner's runtime instructions.
+
+## Reproducible comparison
+
+After building, run `python3 experiments/compare.py --repository /path/to/frozen/keeper
+--tasks experiments/keeper-tasks.json --output /path/to/new/results-directory` with local Codex
+authentication and `JEV_API_KEY` available. This explicitly invokes paid models. The same two
+questions and revision run ordinary rg/reads against evidence-only MCP access, reversing arm order
+between tasks. Each arm gets an isolated configuration and a temporary private auth copy, removed
+after execution. Outputs include token/cache counts, latency, tool events and answers for source-based
+quality checking. Artifacts can contain source evidence and are private experiment data; they are
+separate from sanitized production metadata logs. A single pair per question is exploratory.

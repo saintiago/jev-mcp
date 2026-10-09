@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -71,97 +72,103 @@ async function session(status = 200) {
   await s.initialize();
   return s;
 }
-describe('repository tools over stdio', () => {
-  it('advertises exactly the replacement tools', async () => {
+describe('evidence tools over stdio', () => {
+  it('advertises only the replacement interface', async () => {
     const s = await session();
     expect((await s.listTools()).tools.map((t) => t.name)).toEqual([
-      'search_repo',
-      'inspect_files',
+      'retrieve_evidence',
+      'expand_evidence',
     ]);
   });
-  it('returns whole-file assessments without source or reasons', async () => {
+  it('returns original source and line bounds over protocol-only stdout', async () => {
     const s = await session();
-    const result = await s.callTool({
-      paths: ['camera.ts'],
-      questions: [
-        { id: 'camera', question: 'Does it implement camera acquisition?' },
-      ],
+    const r = await s.callTool({
+      requests: [{ path: 'camera.ts', full: true }],
     }).response;
-    expect(result.isError).toBeFalsy();
-    expect(result.structuredContent).toMatchObject({
-      files: [
-        { path: 'camera.ts', assessments: [{ id: 'camera', score: 0.9 }] },
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredContent).toMatchObject({
+      windows: [
+        {
+          path: 'camera.ts',
+          start: 1,
+          end: 1,
+          text: 'export const camera = "whole-file-marker";',
+        },
       ],
     });
-    expect(textContent(result)).not.toContain('whole-file-marker');
     expect(s.stdoutAsProtocolOnly()).toBe(true);
   });
-  it('supports literal discovery without a provider request', async () => {
-    const s = await session();
-    const result = await s.callTool({ query: 'camera' }, 5000, 'search_repo')
-      .response;
-    expect(result.structuredContent).toMatchObject({
-      method: 'literal',
-      files: [{ path: 'camera.ts', score: 1 }],
+  it('supports deterministic retrieval with a failing provider', async () => {
+    const s = await session(503);
+    const r = await s.callTool(
+      { terms: ['camera'] },
+      undefined,
+      'retrieve_evidence',
+    ).response;
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredContent).toMatchObject({
+      method: 'exact',
       usage: { calls: 0 },
     });
   });
-  it('reports provider failures safely and leaves the server usable', async () => {
-    const s = await session(429);
-    const error = await s.callTool({
-      paths: ['camera.ts'],
-      questions: [{ id: 'x', question: 'Is it relevant?' }],
-    }).response;
-    expect(error.isError).not.toBe(true);
-    expect(JSON.parse(textContent(error))).toMatchObject({
-      files: [],
-      coverage: {
-        complete: false,
-        skipped: [
-          {
-            path: 'camera.ts',
-            reason: 'evaluation_failed',
-            errorCode: 'rate_limited',
-          },
-        ],
-      },
+  it('retrieves conceptual evidence through JEv', async () => {
+    const s = await session();
+    const r = await s.callTool(
+      { question: 'Where is camera acquisition?' },
+      undefined,
+      'retrieve_evidence',
+    ).response;
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredContent).toMatchObject({
+      method: 'semantic',
+      windows: [{ path: 'camera.ts' }],
+    });
+  });
+  it('reports safe partial provider failures while allowing unfiltered expansion', async () => {
+    const s = await session(503);
+    const r = await s.callTool(
+      { question: 'Find media' },
+      undefined,
+      'retrieve_evidence',
+    ).response;
+    expect(r.structuredContent).toMatchObject({
+      windows: [],
+      coverage: { complete: false },
       usage: { calls: 2 },
     });
-    const second = await s.callTool({ query: 'camera' }, 5000, 'search_repo')
-      .response;
-    expect(second.isError).toBeFalsy();
+    expect(
+      (
+        await s.callTool({ requests: [{ path: 'camera.ts', full: true }] })
+          .response
+      ).isError,
+    ).toBeFalsy();
   });
-  it('rejects outside paths without revealing their contents', async () => {
+  it('rejects invalid arguments and traversal', async () => {
     const s = await session();
-    const result = await s.callTool({
-      paths: ['../outside'],
-      questions: [{ id: 'x', question: 'Is it relevant?' }],
-    }).response;
-    expect(textContent(result)).toContain('invalid_input');
+    expect(
+      (await s.callTool({ requests: [{ path: '../secret' }] }).response)
+        .isError,
+    ).toBe(true);
+    expect((await s.callTool({ requests: [] }).response).isError).toBe(true);
   });
 });
 
-it('EOF cancels an outstanding repository provider call and exits', async () => {
-  let arrived!: () => void;
-  const arrival = new Promise<void>((resolve) => {
-    arrived = resolve;
-  });
-  const provider = await startLoopbackServer((request) => {
-    void readJsonBody(request).then(() => arrived());
-  });
-  providers.push(provider.server);
-  const s = await McpSession.start({
-    cwd: root,
-    providerOrigin: provider.origin,
-    env: { JEV_API_KEY: 'synthetic-key', JEV_TIMEOUT_MS: '30000' },
-  });
-  await s.initialize();
-  const call = s.callTool({
-    paths: ['camera.ts'],
-    questions: [{ id: 'x', question: 'Is camera acquisition implemented?' }],
-  });
-  void call.response.catch(() => undefined);
-  await arrival;
-  s.endStdin();
-  expect((await s.waitForExit()).code).toBe(0);
-});
+it('services cancellation and catalogue requests during dense exact retrieval', async () => {
+  await writeFile(path.join(root, 'dense.txt'), 'hit\n'.repeat(127000));
+  const s = await session(503);
+  const pending = s.callTool(
+    { scope: 'dense.txt', terms: ['hit'], maxChars: 1000 },
+    500,
+    'retrieve_evidence',
+  );
+  // MCP suppresses the response to an acknowledged cancelled request.
+  const settled = pending.response.catch(() => undefined);
+  await delay(20);
+  s.cancel(pending.id, 'cancel dense source processing');
+  const catalogue = await s.send('tools/list', {}, 1500).response;
+  expect(catalogue).toHaveProperty('tools');
+  const result = await settled;
+  if (result && !result.isError)
+    expect(result.structuredContent).toMatchObject({ usage: { calls: 0 } });
+  expect(s.stdoutAsProtocolOnly()).toBe(true);
+}, 4000);

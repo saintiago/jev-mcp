@@ -1,0 +1,12 @@
+[
+  {
+    "id": "camera",
+    "scope": "src/capture",
+    "question": "Find the code that acquires browser camera media and releases it on shutdown. Explain what happens if media acquisition completes after shutdown. Cite owning functions and lines."
+  },
+  {
+    "id": "stale",
+    "scope": "src/card-list",
+    "question": "Find the code that prevents old asynchronous source and enrichment responses from updating a newer list lifecycle. Explain the guard, citing functions and lines."
+  }
+]

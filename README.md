@@ -1,33 +1,30 @@
-# JEv repository tools
+# JEv repository evidence
 
-Repository discovery and whole-file screening through TypeSafe JEv. No generative LLM.
+Batched repository evidence for coding agents, using ripgrep and TypeSafe JEv.
 
-- `search_repo({query, scope?, limit?})` returns ranked file paths and coverage.
-- `inspect_files({paths, questions:[{id,question}]})` returns typed per-file assessments.
+- `retrieve_evidence`: a question, scope and optional literal terms return exact source windows
+  from several files, with original line bounds and explicit omissions.
+- `expand_evidence`: retrieve several exact ranges or complete files without JEv filtering.
 
-Agents read selected whole files themselves. Results contain no source excerpts or generated
-reasons. Scores are advisory; negative results do not establish absence or bug freedom.
-Conceptual search screens candidates then validates whole files, so coverage can be incomplete.
-
-## TypeScript
+The previous `search_repo`, `inspect_files` and `ask_jev` interfaces are not exposed. No generated
+explanations, autonomous investigation, correctness adjudication or silent shell filtering.
 
 ```ts
 import { createJevClient, createRepositoryClient } from '@saintiago/jev';
 const repo = createRepositoryClient(
   createJevClient({ apiKey: process.env.JEV_API_KEY! }),
-  process.cwd(),
+  '.',
 );
-const result = await repo.searchRepo({
-  query: 'Where does the browser open its camera?',
+const evidence = await repo.retrieveEvidence({
   scope: 'src',
+  terms: ['getUserMedia'],
+});
+const expanded = await repo.expandEvidence({
+  requests: [{ path: 'src/camera.ts', full: true }],
 });
 ```
 
-## MCP
-
-Install the packed package and launch `jev-mcp` with the repository working directory and
-`JEV_API_KEY` inherited from host configuration. It advertises exactly `search_repo` and
-`inspect_files`. Optional `JEV_USAGE_LOG_PATH` enables sanitized usage metadata.
-
-Run `npm ci && npm run validate` in WSL. Package consumption uses `npm pack`, without npm
-publication. [Contracts](docs/contracts.md) own tool shapes, limits and error behavior.
+Build with `npm ci && npm run validate`; start `JEV_API_KEY=... node dist/mcp.js` in the target Git
+checkout. Optional local metadata logs: `JEV_USAGE_LOG_PATH` and `JEV_RETRIEVAL_LOG_PATH`.
+See [contracts](docs/contracts.md), [architecture](docs/architecture.md),
+[scope](docs/project-charter.md) and [development](docs/development.md).

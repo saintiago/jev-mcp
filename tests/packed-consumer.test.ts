@@ -33,7 +33,7 @@ it('installs standalone API declarations and exposes the replacement tools', asy
     );
     await writeFile(
       path.join(consumer, 'check.ts'),
-      `import {createRepositoryClient,createJevClient} from '@saintiago/jev'; import type {RepositoryClient,SearchRepoResult} from '@saintiago/jev'; const repo:RepositoryClient=createRepositoryClient(createJevClient({apiKey:'synthetic'}),'.'); const output:Promise<SearchRepoResult>=repo.searchRepo({query:'camera'}); void output;`,
+      `import {createRepositoryClient,createJevClient} from '@saintiago/jev'; import type {RepositoryClient,EvidenceResult} from '@saintiago/jev'; const repo:RepositoryClient=createRepositoryClient(createJevClient({apiKey:'synthetic'}),'.'); const output:Promise<EvidenceResult>=repo.retrieveEvidence({terms:['camera']}); void output;`,
     );
     execFileSync(
       process.execPath,
@@ -61,8 +61,8 @@ it('installs standalone API declarations and exposes the replacement tools', asy
     try {
       await session.initialize();
       expect((await session.listTools()).tools.map((t) => t.name)).toEqual([
-        'search_repo',
-        'inspect_files',
+        'retrieve_evidence',
+        'expand_evidence',
       ]);
     } finally {
       session.endStdin();

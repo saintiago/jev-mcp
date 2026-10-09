@@ -3,8 +3,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
-  searchRepoSchema,
-  inspectFilesSchema,
+  retrieveEvidenceSchema,
+  expandEvidenceSchema,
 } from './repository-contracts.js';
 import { createRepositoryClient } from './repository.js';
 import { createJevClient, JevError } from './index.js';
@@ -36,6 +36,11 @@ function clientFromEnvironment(env: NodeJS.ProcessEnv): {
     }
     timeoutMs = Number(rawTimeout);
   }
+  const retrievalLogPath = env.JEV_RETRIEVAL_LOG_PATH;
+  if (retrievalLogPath !== undefined && retrievalLogPath.trim() === '')
+    throw new StartupError(
+      'JEV_RETRIEVAL_LOG_PATH must name a nonempty file path.',
+    );
   const usageLogPath = env.JEV_USAGE_LOG_PATH;
   const usageLogCaller = env.JEV_USAGE_LOG_CALLER;
   let usageLog: JevUsageLogOptions | undefined;
@@ -58,7 +63,7 @@ function clientFromEnvironment(env: NodeJS.ProcessEnv): {
         ...(timeoutMs !== undefined && { timeoutMs }),
         ...(usageLog !== undefined && { usageLog }),
       }),
-      loggingEnabled: usageLog !== undefined,
+      loggingEnabled: usageLog !== undefined || retrievalLogPath !== undefined,
     };
   } catch (error) {
     if (error instanceof JevError) {
@@ -81,7 +86,18 @@ function failureResult(error: JevError): CallToolResult {
 
 function createServer(client: JevClient, loggingEnabled: boolean): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
-  const repository = createRepositoryClient(client, process.cwd());
+  const repository = createRepositoryClient(
+    client,
+    process.cwd(),
+    process.env['JEV_RETRIEVAL_LOG_PATH'] === undefined
+      ? undefined
+      : {
+          path: process.env['JEV_RETRIEVAL_LOG_PATH'],
+          ...(process.env['JEV_USAGE_LOG_CALLER'] === undefined
+            ? {}
+            : { caller: process.env['JEV_USAGE_LOG_CALLER'] }),
+        },
+  );
   const annotations = { readOnlyHint: !loggingEnabled, openWorldHint: true };
   async function respond(
     operation: () => Promise<object>,
@@ -101,26 +117,30 @@ function createServer(client: JevClient, loggingEnabled: boolean): McpServer {
     }
   }
   server.registerTool(
-    'search_repo',
+    'retrieve_evidence',
     {
       description:
-        'Find relevant repository files without loading source into agent context. Exact symbols/literals use text search; conceptual queries use JEv candidate screening and whole-file judgments. Returns paths, scores, source state and incomplete coverage. Read selected whole files yourself. Source is sent to TypeSafe; optional host usage logging writes sanitized metadata. No generated reasons, excerpts or modifications.',
-      inputSchema: searchRepoSchema,
+        'Find and read evidence from multiple repository files in one call. Supply scope and a question, exact literal terms, or both. Uses rg first and JEv for conceptual/noisy discovery. Returns exact excerpts with paths, original start/end lines, source identity and explicit omissions. Batch expand_evidence for missing context. Scores never establish absence or correctness. Source may be sent to TypeSafe; optional logs contain metadata only.',
+      inputSchema: retrieveEvidenceSchema,
       annotations,
     },
     (request, extra) =>
-      respond(() => repository.searchRepo(request, { signal: extra.signal })),
+      respond(() =>
+        repository.retrieveEvidence(request, { signal: extra.signal }),
+      ),
   );
   server.registerTool(
-    'inspect_files',
+    'expand_evidence',
     {
       description:
-        'Judge bounded questions against specified whole repository files without loading their contents into agent context. Returns typed per-file scores and the supplied criteria, with coverage and skipped files. Negative assessments do not prove absence or bug freedom. Source is sent to TypeSafe; optional host usage logging writes sanitized metadata. No generated prose or modifications.',
-      inputSchema: inspectFilesSchema,
+        'Read multiple exact source ranges or complete files in one call, without JEv filtering. Use full=true for complete source or start/end for surrounding evidence. Returns original text and line numbers, merging overlapping ranges. Ignored, binary and unavailable files remain explicit. No modifications or correctness judgments.',
+      inputSchema: expandEvidenceSchema,
       annotations,
     },
     (request, extra) =>
-      respond(() => repository.inspectFiles(request, { signal: extra.signal })),
+      respond(() =>
+        repository.expandEvidence(request, { signal: extra.signal }),
+      ),
   );
   return server;
 }

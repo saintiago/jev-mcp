@@ -1,13 +1,13 @@
 # Purpose and scope
 
-Help coding agents find relevant repository files before loading source into their context.
-JEv supplies structured judgments; no generative LLM produces explanations.
+Provide coding agents with source evidence using less context and fewer retrieval turns.
+The stdio interface is `retrieve_evidence` and `expand_evidence`; the previous repository
+search and file-judgment tools are removed without compatibility aliases.
 
-The stdio tools are `search_repo` and `inspect_files`. They read repository content themselves,
-return paths and typed assessments, and let agents read selected whole files. There is no
-`ask_jev` tool, precise excerpt selection, history pruning, memory management, autonomous shell
-execution, code modification or workflow approval gate. No persistent index is maintained.
+Retrieval combines deterministic ripgrep discovery, optional TypeSafe JEv relevance screening
+and batched exact source windows. Expansion retrieves requested source without a model.
+No generative LLM produces explanations. Consumers own investigation and conclusions.
 
-The TypeScript provider client remains the low-level TypeSafe transport. Repository tools own
-candidate screening, file access, relevance thresholds and coverage. Consumers own actions.
-A negative judgment does not prove absence or bug freedom. Scores are advisory.
+Excluded: autonomous investigation agents, correctness adjudication, history pruning, silent
+shell-output filtering, source modification and workflow approval gates. No persistent index
+or embeddings service is maintained. Negative judgments never establish absence or bug freedom.

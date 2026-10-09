@@ -1,25 +1,36 @@
 import { z } from 'zod';
 import type { JevErrorCode } from './errors.js';
-const questionSchema = z.strictObject({
-  id: z.string().min(1).max(100),
-  question: z.string().min(1).max(4000),
-});
-export const searchRepoSchema = z.strictObject({
-  query: z.string().min(1).max(4000),
-  scope: z.string().min(1).optional(),
-  limit: z.number().int().min(1).max(30).default(10),
-});
-export const inspectFilesSchema = z
+export const retrieveEvidenceSchema = z
   .strictObject({
-    paths: z.array(z.string().min(1)).min(1).max(30),
-    questions: z.array(questionSchema).min(1).max(16),
+    question: z.string().trim().min(1).max(4000).optional(),
+    scope: z.string().min(1).default('.'),
+    terms: z.array(z.string().min(1).max(200)).max(16).default([]),
+    maxChars: z.number().int().min(1000).max(64000).default(16000),
   })
-  .refine(
-    (r) => new Set(r.questions.map((q) => q.id)).size === r.questions.length,
-  );
-export type SearchRepoRequest = z.input<typeof searchRepoSchema>;
-export type InspectFilesRequest = z.input<typeof inspectFilesSchema>;
+  .refine((r) => r.question !== undefined || r.terms.length > 0);
+export const expandEvidenceSchema = z.strictObject({
+  requests: z
+    .array(
+      z
+        .strictObject({
+          path: z.string().min(1),
+          start: z.number().int().positive().optional(),
+          end: z.number().int().positive().optional(),
+          full: z.boolean().default(false),
+        })
+        .refine(
+          (r) =>
+            !(r.full && (r.start !== undefined || r.end !== undefined)) &&
+            (r.end === undefined || r.end >= (r.start ?? 1)),
+        ),
+    )
+    .min(1)
+    .max(30),
+});
+export type RetrieveEvidenceRequest = z.input<typeof retrieveEvidenceSchema>;
+export type ExpandEvidenceRequest = z.input<typeof expandEvidenceSchema>;
 export interface RepositorySource {
+  root: string;
   revision: string;
   workingTreeDirty: boolean;
   contentDigest: string;
@@ -42,29 +53,30 @@ export interface RepositoryCoverage {
   filesInspected: number;
   complete: boolean;
   skipped: SkippedFile[];
+  limits: ('inventory' | 'candidates' | 'budget' | 'semantic_filter')[];
 }
 export interface RepositoryUsage {
   calls: number;
   input_tokens: number;
   output_tokens: number;
 }
-export interface FileAssessment {
-  id: string;
-  criterion: string;
-  score: number;
-  assessment: 'evidence' | 'insufficient_evidence' | 'not_found';
+export interface EvidenceWindow {
+  path: string;
+  start: number;
+  end: number;
+  text: string;
 }
-export interface SearchRepoResult {
-  query: string;
-  method: 'literal' | 'jev';
-  files: { path: string; score: number }[];
+export interface EvidenceFile {
+  path: string;
+  totalLines: number;
+  omitted: boolean;
+}
+export interface EvidenceResult {
+  method: 'exact' | 'semantic' | 'expanded';
+  files: EvidenceFile[];
+  windows: EvidenceWindow[];
   source: RepositorySource;
   coverage: RepositoryCoverage;
   usage: RepositoryUsage;
-}
-export interface InspectFilesResult {
-  files: { path: string; assessments: FileAssessment[] }[];
-  source: RepositorySource;
-  coverage: RepositoryCoverage;
-  usage: RepositoryUsage;
+  notice: string;
 }

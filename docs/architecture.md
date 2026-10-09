@@ -1,25 +1,24 @@
 # Architecture
 
-One package contains independent TypeSafe transport, repository inspection and a thin stdio adapter.
+One package contains independent TypeSafe transport, repository evidence retrieval and a thin stdio adapter.
 
-`MCP agent -> repository public API -> Git/ripgrep filesystem inventory + TypeSafe JEv transport`
+`MCP agent -> repository public API -> Git/ripgrep/filesystem + optional TypeSafe JEv transport`
 
-Repository inspection owns root confinement, ignore rules, file limits, candidate selection,
-whole-file judgments, ranking and coverage. It runs deterministic read-only inventory commands;
-no agent-provided shell is executed. Source is evidence, never executable instructions.
+Repository retrieval owns root confinement, ignore rules, inventory limits, exact discovery,
+semantic candidate selection, bounded source windows, overlap merging, evidence budgets and coverage.
+Commands have fixed executables and argument arrays; supplied terms are literal data, never shell code.
+Source is evidence, not instructions. Returned excerpts are original source with separate line bounds.
 
-Exact lookup is deterministic. Conceptual lookup screens compact file descriptors, then validates
-shortlisted whole files. Only paths, scores, typed criteria and coverage reach the agent. The agent
-reads selected whole files separately. Candidate omissions remain visible as incomplete coverage.
-No embeddings service, generative LLM, persistent index or local model is introduced.
+Exact evidence fitting the requested budget is returned without provider calls. Conceptual discovery
+screens file descriptors, then source sections. Noisy exact results screen sections of matching files.
+Selection favors evidence from several files before spending remaining budget within a file. Partial
+evidence is useful: a section need not answer every part of a question. Consumers can retrieve further
+exact matches or expand any named source without JEv. Expansion has no discovery size or relevance cap.
 
-The transport owns credentials, HTTPS, request/response validation, cancellation, deadlines,
-safe errors and optional sanitized usage records. Provider wire types have one authoritative
-schema module. Repository request schemas have their own focused public contract.
+The transport owns credentials, HTTPS, wire validation, deadlines, cancellation and safe errors.
+Repository evaluations own one transient retry and bounded concurrency. Failed screening is reported
+explicitly, never converted to a negative score. Optional retrieval logging records metadata only.
 
-The stdio adapter owns environment parsing, protocol startup and shutdown; it delegates both tools
-to the repository API. It does not duplicate search or assessment policies. Package imports have
-no startup side effects. Built ESM and declarations ship with the installed executable.
-
-The public contracts and limits are in [contracts](contracts.md); validation is described in
-[development](development.md). Consumer-specific workflow decisions remain outside the package.
+The stdio adapter owns environment parsing, protocol startup and shutdown and delegates both tools
+to the public API. Package imports have no startup side effects. Contracts and limits are defined
+in [contracts](contracts.md); validation is defined in [development](development.md).

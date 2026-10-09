@@ -223,7 +223,7 @@ export class McpSession {
   callTool(
     args: unknown,
     timeoutMs = 5000,
-    name = 'inspect_files',
+    name = 'expand_evidence',
   ): { id: number; response: Promise<McpCallToolResult> } {
     return this.send('tools/call', { name, arguments: args }, timeoutMs) as {
       id: number;

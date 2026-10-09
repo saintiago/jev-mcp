@@ -26,13 +26,14 @@ export type { JevUsageLogOptions } from './usage-log.js';
 export { createRepositoryClient } from './repository.js';
 export type { RepositoryClient } from './repository.js';
 export type {
-  SearchRepoRequest,
-  SearchRepoResult,
-  InspectFilesRequest,
-  InspectFilesResult,
+  RetrieveEvidenceRequest,
+  ExpandEvidenceRequest,
+  EvidenceResult,
+  EvidenceWindow,
+  EvidenceFile,
   RepositorySource,
   RepositoryCoverage,
   RepositoryUsage,
-  FileAssessment,
   SkippedFile,
 } from './repository-contracts.js';
+export type { RetrievalLogOptions } from './repository.js';

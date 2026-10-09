@@ -2,63 +2,77 @@
 
 ## Repository API
 
-`createRepositoryClient(client, directory)` returns `searchRepo(request, {signal}?)` and
-`inspectFiles(request, {signal}?)`. The directory identifies the Git checkout; paths are relative
-to its root. Reject absolute paths, traversal and escaping symlinks before provider calls.
-Respect Git ignore rules. Read source directly, without returning its contents to the agent.
+`createRepositoryClient(client, directory, retrievalLog?)` returns `retrieveEvidence(request, {signal}?)`
+and `expandEvidence(request, {signal}?)`. The directory identifies a Git checkout. Paths are relative
+to its root. Absolute paths, traversal, NULs and escaping symlinks are rejected. Git ignore rules apply
+to both requested aliases and resolved targets. The whole expansion batch is confined before reading.
 
-`search_repo({query, scope?, limit?})`: limit defaults to 10, maximum 30. A standalone symbol
-or a quoted literal uses ordinary text lookup without JEv. Conceptual queries use JEv screening
-of file names/introduction/declarations, followed by whole-file judgments on up to 60 candidates
-(at least 12, or three times the requested result limit). Return only judgments scoring at least
-0.65. Candidate screening is retrieval guidance, not proof of absence. Related direct callers
-may also be relevant. Empty results are supported.
+`retrieve_evidence({question?, scope?, terms?, maxChars?})` requires a question or literal terms.
+Scope defaults to the repository root and accepts a file or directory. Up to 16 terms, each 200
+characters, are passed as literal ripgrep patterns. The question is at most 4000 characters.
+`maxChars` defaults to 16000 and ranges from 1000 to 64000; it budgets returned source text.
 
-`inspect_files({paths, questions})`: up to 30 paths and 16 `{id, question}` entries with unique
-IDs. Each file is supplied in full to JEv, with all questions. Return original criteria and typed
-scores: `evidence` at 0.65 or above, `insufficient_evidence` at 0.4–0.65, `not_found` below 0.4.
-These labels describe assessments of supplied evidence, not established correctness.
+Exact discovery returns surrounding lines without JEv when evidence fits. A question enables semantic
+fallback for zero exact hits and relevance screening when exact evidence exceeds the budget.
+Conceptual lookup screens descriptors in batches of 12, then up to 24 candidate files in 60-line
+sections. Descriptors scoring at least 0.2 become candidates; sections scoring at least 0.4 become
+possible evidence. Scores are internal relevance hints, not correctness judgments. Sections larger
+than 24000 characters are omitted explicitly. Windows are merged, balanced across files and bounded
+at whole lines. Source may be incomplete; no match is not proof of absence.
 
-Both tools return source state (HEAD, dirty working tree flag, digest of files actually read),
-coverage (discovered/read/inspected counts, completeness, skipped files) and aggregate provider
-usage (attempt count includes failures/retries; token counts include successful responses only). They return no generated explanations or source excerpts. A digest identifies read
-content, not an atomic repository snapshot. Candidate filtering explicitly limits completeness.
+Discovery reads Git tracked and nonignored untracked inventory, including hidden files, up to 600
+files and 512000 bytes per file. Binary/invalid-UTF-8, unreadable, ignored, oversized and escaping inventory links are reported.
+An explicitly requested escaping path remains invalid input.
+Inventory overflow, candidate selection, semantic filtering and budget truncation are explicit limits.
 
-Use Git's tracked and nonignored untracked inventory, including nonignored hidden files. At most
-600 files are read per discovery; inventory overflow is reported. Binary, unreadable and files
-larger than 128000 bytes are skipped, never silently truncated. Ignored inspection paths are
-reported as skipped. Missing/non-directory scope is invalid input. An empty scope returns an
-empty result. Tools never execute source or accept shell commands.
+`expand_evidence({requests})` accepts 1–30 `{path, start?, end?, full?}` entries. Line numbers are
+one-based and inclusive; omitted end reads through EOF. `full: true` reads the entire file and cannot
+be combined with line bounds. Inverted ranges and starts beyond EOF are invalid. Ends beyond EOF are
+clamped. Overlapping/adjacent ranges merge. Expansion bypasses JEv and discovery file-size/output
+budgets; the caller explicitly chooses how much source to load. Binary, ignored or missing files are
+reported rather than invented. No commands or code modifications are accepted.
 
-Repository evaluations retry once after a randomized 250–499ms delay for timeout, rate limiting,
-network unavailability or HTTP 5xx. Concurrency remains four. A second provider failure is reported
-per affected file as `evaluation_failed` with its safe `errorCode`; successful evaluations remain in
-the result and coverage is incomplete. Failed candidate batches report every affected path and do
-not receive a negative score. Authentication, invalid input and cancellation still fail the call.
-Invalid provider responses are reported as failed evaluations without retrying. There is no fallback
-model. The low-level transport itself does not retry.
+Both operations return exact `windows: [{path,start,end,text}]` and per-file total lines/omission
+flags. Text has no inserted line prefixes or generated summaries. `source` contains the absolute root,
+HEAD, dirty flag and digest of bytes actually read, not an atomic filesystem snapshot. `coverage`
+contains discovered/read/inspected counts, explicit limits and skipped files. Completeness describes
+search coverage, not whether the agent has enough evidence. `usage` counts provider attempts including
+failures/retries and tokens from successful responses only. The notice identifies partial evidence and
+unfiltered batched expansion. Section scores never reach the agent as approval or correctness labels.
+
+Repository evaluations retry once after 250–499ms jitter for timeout, rate limit, network unavailability
+or HTTP 5xx. Concurrency is four. Exhausted transient errors and invalid responses produce per-file
+`evaluation_failed` entries with safe error codes and incomplete coverage. Authentication, invalid
+input and cancellation fail the call. Explicit retrieval/expansion remains available without provider
+calls. The low-level transport does not retry or substitute models.
 
 ## MCP startup and lifecycle
 
-The installed `jev-mcp` executable exposes exactly `search_repo` and `inspect_files`, bound to
-its working directory. Host environment supplies `JEV_API_KEY`, optional `JEV_MODEL`,
-`JEV_TIMEOUT_MS`, and optional `JEV_USAGE_LOG_PATH` / `JEV_USAGE_LOG_CALLER`. Credentials,
-model settings and repository root are not tool arguments. Stdout is protocol-only. Cancellation
-propagates through file operations and provider calls; EOF and termination close the server.
-Optional usage logs contain metadata, never raw source, queries or credentials.
+The installed `jev-mcp` executable exposes exactly `retrieve_evidence` and `expand_evidence` in its
+working directory. Host settings are `JEV_API_KEY`, optional `JEV_MODEL`, `JEV_TIMEOUT_MS`,
+`JEV_USAGE_LOG_PATH`, `JEV_USAGE_LOG_CALLER` and `JEV_RETRIEVAL_LOG_PATH`. Repository root,
+credentials and model settings are not tool arguments. Stdout is protocol-only. Cancellation reaches
+provider calls, inventory commands and file reads; EOF and termination close the server.
+
+## Local usage logging
+
+Logging is opt-in and local. Provider usage records retain the existing sanitized transport metadata;
+repository calls suppress supplied questions. Retrieval records contain timestamp, operation, method,
+duration, counts, returned source characters, coverage limits, skipped-reason counts, aggregate provider
+usage and optional caller. Errors log only safe codes. Neither log contains source, questions, search
+terms, source paths, credentials, authentication headers or raw provider error bodies. Retrieval log
+failures never change the operation result. Newly created logs use owner-only permissions.
 
 ## Provider transport
 
-`createJevClient(options).evaluate(request, {signal}?)` is the independent low-level transport.
-It supports typed noul, choice and score questions at the fixed TypeSafe System One endpoint,
-using bearer authentication. Defaults: `jev-1.13.0`, 30000ms per provider request. Validate
-request/response shapes, preserve provider values, and use safe `JevError` categories for
-invalid input/response, authentication, rate limiting, timeout, cancellation and unavailability.
-There are no automatic retries or fallback models. The repository tools use noul judgments.
+`createJevClient(options).evaluate(request, {signal}?)` remains the independent transport for typed
+noul, choice and score questions at the fixed TypeSafe System One endpoint. Defaults: `jev-1.13.0`,
+30000ms per request. It owns request/response validation, safe errors and no automatic retries.
 
 ## Validation
 
-Verify literal zero-provider lookup, conceptual full-file validation, related files, empty results,
-source exclusion from tool results, limits and incomplete coverage, path/ignore boundaries,
-safe failures, cancellation, stdio discovery and clean packed consumption. Live discovery
-checks known targets, misleading neighbors and absent features; it is not a proof of recall.
+Verify batched source fidelity, original line bounds, overlap merging, explicit budgets and omissions,
+zero-provider exact discovery/expansion, semantic retrieval, coverage, confinement and ignore rules,
+large explicit reads, cancellation, partial failures, logging privacy, stdio lifecycle and packed
+consumption. Controlled providers drive default tests. Explicit live comparisons report quality,
+agent input/cache usage, latency, turns and failures; small samples do not establish general savings.
