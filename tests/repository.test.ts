@@ -295,3 +295,26 @@ it('keeps retrieval available if metadata logging fails', async () => {
   }).retrieveEvidence({ terms: ['camera'] });
   expect(r.windows).toHaveLength(1);
 });
+
+it('skips escaping inventory links while preserving valid discovery evidence', async () => {
+  await symlink('/etc/passwd', path.join(root, 'outside.ts'));
+  const r = await createRepositoryClient(client, root).retrieveEvidence({
+    terms: ['camera'],
+  });
+  expect(r.windows.some((w) => w.path === 'camera.ts')).toBe(true);
+  expect(r.coverage.skipped).toContainEqual({
+    path: 'outside.ts',
+    reason: 'outside_repository',
+  });
+});
+it('reports invalid UTF-8 rather than inventing replacement source characters', async () => {
+  await writeFile(path.join(root, 'invalid.ts'), Buffer.from([0xff]));
+  const r = await createRepositoryClient(client, root).expandEvidence({
+    requests: [{ path: 'invalid.ts', full: true }],
+  });
+  expect(r.windows).toEqual([]);
+  expect(r.coverage.skipped).toContainEqual({
+    path: 'invalid.ts',
+    reason: 'binary',
+  });
+});

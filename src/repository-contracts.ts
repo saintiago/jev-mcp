@@ -38,6 +38,7 @@ export interface RepositorySource {
 export interface SkippedFile {
   path: string;
   reason:
+    | 'outside_repository'
     | 'ignored'
     | 'unreadable'
     | 'binary'

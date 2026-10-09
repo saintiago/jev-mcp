@@ -21,7 +21,8 @@ than 24000 characters are omitted explicitly. Windows are merged, balanced acros
 at whole lines. Source may be incomplete; no match is not proof of absence.
 
 Discovery reads Git tracked and nonignored untracked inventory, including hidden files, up to 600
-files and 512000 bytes per file. Binary, unreadable, ignored and oversized files are reported.
+files and 512000 bytes per file. Binary/invalid-UTF-8, unreadable, ignored, oversized and escaping inventory links are reported.
+An explicitly requested escaping path remains invalid input.
 Inventory overflow, candidate selection, semantic filtering and budget truncation are explicit limits.
 
 `expand_evidence({requests})` accepts 1–30 `{path, start?, end?, full?}` entries. Line numbers are

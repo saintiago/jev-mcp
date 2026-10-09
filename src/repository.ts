@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
 import { readFile, realpath, stat, appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -124,7 +125,20 @@ export function createRepositoryClient(
     fullRead = false,
   ): Promise<File | null> {
     if (options.signal?.aborted) throw new JevError('cancelled');
-    const full = await resolveInside(root, name);
+    let full: string;
+    try {
+      full = await resolveInside(root, name);
+    } catch (error) {
+      if (
+        !fullRead &&
+        error instanceof JevError &&
+        error.code === 'invalid_input'
+      ) {
+        skipped.push({ path: name, reason: 'outside_repository' });
+        return null;
+      }
+      throw error;
+    }
     for (const candidate of new Set([name, path.relative(root, full)])) {
       try {
         await run('git', ['check-ignore', '-q', '--', candidate], {
@@ -155,7 +169,7 @@ export function createRepositoryClient(
         skipped.push({ path: name, reason: 'too_large' });
         return null;
       }
-      if (bytes.includes(0)) {
+      if (bytes.includes(0) || !isUtf8(bytes)) {
         skipped.push({ path: name, reason: 'binary' });
         return null;
       }
