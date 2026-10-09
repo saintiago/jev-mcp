@@ -33,7 +33,7 @@ for index, task in enumerate(tasks):
         (home / 'auth.json').chmod(0o600)
         config = ['cli_auth_credentials_store = "file"', 'model = ' + json.dumps(args.model), 'model_reasoning_effort = ' + json.dumps(args.effort), 'approval_policy = "never"', 'sandbox_mode = "read-only"', 'web_search = "disabled"', '[features]', 'apps = false', 'browser_use = false', 'multi_agent = false', 'shell_tool = ' + ('false' if arm == 'evidence' else 'true'), 'unified_exec = ' + ('false' if arm == 'evidence' else 'true'), '[apps._default]', 'enabled = false']
         if arm == 'evidence':
-            config += ['[mcp_servers.jev]', 'command = ' + json.dumps(str(server)), 'required = true', 'default_tools_approval_mode = "approve"', 'env_vars = ["JEV_API_KEY", "JEV_USAGE_LOG_PATH", "JEV_RETRIEVAL_LOG_PATH"]', 'tool_timeout_sec = 90']
+            config += ['[mcp_servers.jev]', 'command = ' + json.dumps(shutil.which('node') or 'node'), 'args = ' + json.dumps([str(server)]), 'required = true', 'default_tools_approval_mode = "approve"', 'env_vars = ["JEV_API_KEY", "JEV_USAGE_LOG_PATH", "JEV_RETRIEVAL_LOG_PATH"]', 'tool_timeout_sec = 90']
         (home / 'config.toml').write_text('\n'.join(config) + '\n')
         prompt = 'Read-only repository investigation. Do not modify files, run tests/builds, start workflows, delegate, use memory or browse. Answer in at most 100 words with owning functions and precise source citations. Scope: ' + task['scope'] + '. Question: ' + task['question']
         prompt += (' Use only retrieve_evidence and expand_evidence for repository search/reading. Retrieve several files together with a focused question and known literal terms. Batch missing ranges or full source through expansion; never infer absence from filtering.' if arm == 'evidence' else ' Use ordinary rg and source reads. Batch independent commands when useful.')
@@ -76,3 +76,6 @@ for index, task in enumerate(tasks):
         (output / 'results.json').write_text(json.dumps(results, indent=2))
         print(json.dumps(row), flush=True)
 print('Saved comparison to ' + str(output), flush=True)
+
+if any(not r['usageAvailable'] or r['exitCode'] != 0 or r['timeout'] for r in results):
+    raise SystemExit('Incomplete comparison: failed or timed-out arms must not be counted as savings.')

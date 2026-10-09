@@ -318,3 +318,107 @@ it('reports invalid UTF-8 rather than inventing replacement source characters', 
     reason: 'binary',
   });
 });
+
+it('reserves exact hit lines across uneven files before surrounding context', async () => {
+  await writeFile(
+    path.join(root, 'a.txt'),
+    Array(100)
+      .fill('needle' + 'x'.repeat(93))
+      .join('\n'),
+  );
+  await writeFile(path.join(root, 'b.txt'), 'needle B');
+  const api = createRepositoryClient(client, root);
+  const r = await api.retrieveEvidence({ terms: ['needle'], maxChars: 1000 });
+  expect(
+    r.windows.some((w) => w.path === 'a.txt' && w.text.includes('needle')),
+  ).toBe(true);
+  expect(
+    r.windows.some((w) => w.path === 'b.txt' && w.text === 'needle B'),
+  ).toBe(true);
+  await writeFile(
+    path.join(root, 'late.txt'),
+    [
+      ...Array(30).fill('x'.repeat(999)),
+      'TARGET',
+      ...Array(30).fill('x'.repeat(999)),
+    ].join('\n'),
+  );
+  const late = await api.retrieveEvidence({
+    scope: 'late.txt',
+    terms: ['TARGET'],
+    maxChars: 1000,
+  });
+  expect(late.windows).toEqual([
+    { path: 'late.txt', start: 31, end: 31, text: 'TARGET' },
+  ]);
+});
+it('charges newline characters when adjacent semantic sections merge', async () => {
+  await writeFile(
+    path.join(root, 'sections.txt'),
+    Array(120).fill('123456789').join('\n'),
+  );
+  const r = await createRepositoryClient(client, root).retrieveEvidence({
+    scope: 'sections.txt',
+    question: 'Find source',
+    maxChars: 1198,
+  });
+  expect(r.windows.reduce((n, w) => n + w.text.length, 0)).toBeLessThanOrEqual(
+    1198,
+  );
+  expect(r.coverage.limits).toContain('budget');
+});
+it('expands confined directory aliases together with sibling requests', async () => {
+  await mkdir(path.join(root, 'real'));
+  await writeFile(path.join(root, 'real/source.txt'), 'source');
+  await symlink('real', path.join(root, 'alias'));
+  const api = createRepositoryClient(client, root);
+  const r = await api.expandEvidence({
+    requests: [{ path: 'alias/source.txt' }, { path: 'other.ts' }],
+  });
+  expect(r.windows.map((w) => w.text)).toEqual(['source', 'unrelated']);
+  await writeFile(path.join(root, '.gitignore'), 'real/\n');
+  const ignored = await api.expandEvidence({
+    requests: [{ path: 'alias/source.txt' }, { path: 'other.ts' }],
+  });
+  expect(ignored.coverage.skipped).toContainEqual({
+    path: 'alias/source.txt',
+    reason: 'ignored',
+  });
+  expect(ignored.windows.map((w) => w.text)).toEqual(['unrelated']);
+  await writeFile(path.join(root, '.gitignore'), 'alias\n');
+  expect(
+    (await api.expandEvidence({ requests: [{ path: 'alias/source.txt' }] }))
+      .coverage.skipped,
+  ).toContainEqual({ path: 'alias/source.txt', reason: 'ignored' });
+});
+it.each(['first\nsecond\n', 'first\nsecond', 'first\r\nsecond\r\n'])(
+  'counts actual EOF lines while preserving source %j',
+  async (text) => {
+    await writeFile(path.join(root, 'eof.txt'), text);
+    const api = createRepositoryClient(client, root);
+    const r = await api.expandEvidence({
+      requests: [{ path: 'eof.txt', full: true }],
+    });
+    expect(r.files).toEqual([
+      { path: 'eof.txt', totalLines: 2, omitted: false },
+    ]);
+    expect(r.windows).toEqual([{ path: 'eof.txt', start: 1, end: 2, text }]);
+    await expect(
+      api.expandEvidence({ requests: [{ path: 'eof.txt', start: 3 }] }),
+    ).rejects.toMatchObject({ code: 'invalid_input' });
+  },
+);
+it('represents an empty full file without inventing a source line', async () => {
+  await writeFile(path.join(root, 'empty.txt'), '');
+  const api = createRepositoryClient(client, root);
+  const r = await api.expandEvidence({
+    requests: [{ path: 'empty.txt', full: true }],
+  });
+  expect(r.windows).toEqual([]);
+  expect(r.files).toEqual([
+    { path: 'empty.txt', totalLines: 0, omitted: false },
+  ]);
+  await expect(
+    api.expandEvidence({ requests: [{ path: 'empty.txt', start: 1 }] }),
+  ).rejects.toMatchObject({ code: 'invalid_input' });
+});

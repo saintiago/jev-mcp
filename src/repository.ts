@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
-import { readFile, realpath, stat, appendFile } from 'node:fs/promises';
+import { readFile, realpath, stat, lstat, appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -139,7 +139,22 @@ export function createRepositoryClient(
       }
       throw error;
     }
-    for (const candidate of new Set([name, path.relative(root, full)])) {
+    // Git rejects descendants of directory symlinks. Check the alias itself
+    // (including its ancestors), then the confined resolved target.
+    let alias = name;
+    const parts = path.relative(root, path.resolve(root, name)).split(path.sep);
+    for (let i = 1; i < parts.length; i++) {
+      const prefix = parts.slice(0, i).join(path.sep);
+      try {
+        if ((await lstat(path.join(root, prefix))).isSymbolicLink()) {
+          alias = prefix;
+          break;
+        }
+      } catch {
+        break;
+      }
+    }
+    for (const candidate of new Set([alias, path.relative(root, full)])) {
       try {
         await run('git', ['check-ignore', '-q', '--', candidate], {
           cwd: root,
@@ -287,7 +302,10 @@ export function createRepositoryClient(
     };
   }
   function lines(file: File): string[] {
-    return file.text.split('\n');
+    if (!file.text) return [];
+    const content = file.text.split('\n');
+    if (file.text.endsWith('\n')) content.pop();
+    return content;
   }
   function window(file: File, start: number, end: number): EvidenceWindow {
     const content = lines(file);
@@ -295,7 +313,9 @@ export function createRepositoryClient(
       path: file.path,
       start,
       end: Math.min(end, content.length),
-      text: content.slice(start - 1, end).join('\n'),
+      text:
+        content.slice(start - 1, end).join('\n') +
+        (end >= content.length && file.text.endsWith('\n') ? '\n' : ''),
     };
   }
   function merge(ranges: EvidenceWindow[], files: File[]): EvidenceWindow[] {
@@ -415,14 +435,18 @@ export function createRepositoryClient(
   ): EvidenceResult {
     const windows = merge(ranges, files);
     const descriptors: EvidenceFile[] = files
-      .filter((f) => windows.some((w) => w.path === f.path))
+      .filter(
+        (f) => method === 'expanded' || windows.some((w) => w.path === f.path),
+      )
       .map((f) => ({
         path: f.path,
         totalLines: lines(f).length,
-        omitted: !windows.some(
-          (w) =>
-            w.path === f.path && w.start === 1 && w.end === lines(f).length,
-        ),
+        omitted:
+          lines(f).length !== 0 &&
+          !windows.some(
+            (w) =>
+              w.path === f.path && w.start === 1 && w.end === lines(f).length,
+          ),
       }));
     return {
       method,
@@ -466,6 +490,7 @@ export function createRepositoryClient(
         coverage.filesRead = files.length;
         // Exact discovery is deterministic and zero-provider. Use literal rg arguments, never shell input.
         const exact: EvidenceWindow[] = [];
+        const anchors = new Map<string, number[]>();
         if (request.terms.length && files.length) {
           await command(
             'rg',
@@ -483,8 +508,12 @@ export function createRepositoryClient(
           for (const file of files) {
             const content = lines(file);
             for (let i = 0; i < content.length; i++)
-              if (request.terms.some((t) => content[i]!.includes(t)))
+              if (request.terms.some((t) => content[i]!.includes(t))) {
                 exact.push(window(file, Math.max(1, i - 15), i + 26));
+                const hits = anchors.get(file.path) ?? [];
+                hits.push(i + 1);
+                anchors.set(file.path, hits);
+              }
           }
         }
         let candidates: File[] = files,
@@ -599,41 +628,46 @@ export function createRepositoryClient(
             )
             .map((r) => r.range);
         } else coverage.filesInspected = files.length;
-        const groups = new Map<string, EvidenceWindow[]>();
-        for (const r of ranges) {
-          const group = groups.get(r.path) ?? [];
-          group.push(r);
-          groups.set(r.path, group);
-        }
-        ranges = [];
-        while ([...groups.values()].some((g) => g.length)) {
-          for (const group of groups.values()) {
-            const r = group.shift();
-            if (r) ranges.push(r);
-          }
-        }
+        const merged = merge(ranges, files);
         const selected: EvidenceWindow[] = [];
-        let remaining = request.maxChars;
-        for (const range of ranges) {
-          if (range.text.length <= remaining) {
-            selected.push(range);
-            remaining -= range.text.length;
-            continue;
-          }
+        if (merged.reduce((n, r) => n + r.text.length, 0) <= request.maxChars) {
+          selected.push(...merged);
+        } else {
           coverage.limits.push('budget');
-          // Preserve whole source lines; never silently cut characters out of a line.
-          const file = files.find((f) => f.path === range.path)!;
-          let end = range.start - 1;
-          let used = 0;
-          for (const line of lines(file).slice(range.start - 1, range.end)) {
-            const size = line.length + (end >= range.start ? 1 : 0);
-            if (used + size > remaining) break;
-            used += size;
-            end++;
-          }
-          if (end >= range.start) {
-            selected.push(window(file, range.start, end));
-            remaining -= used;
+          // One whole line per file per round prevents large context windows
+          // consuming other files' evidence. Exact hit lines precede context.
+          const groups = files
+            .map((file) => {
+              const relevant = merged.filter((r) => r.path === file.path);
+              const order = new Set<number>();
+              for (const hit of anchors.get(file.path) ?? [])
+                if (relevant.some((r) => hit >= r.start && hit <= r.end))
+                  order.add(hit);
+              for (const range of relevant)
+                for (let n = range.start; n <= range.end; n++) order.add(n);
+              return {
+                file,
+                content: lines(file),
+                order: [...order],
+                index: 0,
+              };
+            })
+            .filter((g) => g.order.length);
+          let remaining = request.maxChars;
+          while (groups.some((g) => g.index < g.order.length)) {
+            for (const group of groups) {
+              // Skip a line that cannot fit; a later exact hit may still fit.
+              while (group.index < group.order.length) {
+                const n = group.order[group.index++]!;
+                // Charge the separator even for currently disjoint windows;
+                // later merging and an EOF terminator cannot exceed this cost.
+                const cost = group.content[n - 1]!.length + 1;
+                if (cost > remaining) continue;
+                selected.push(window(group.file, n, n));
+                remaining -= cost;
+                break;
+              }
+            }
           }
         }
         coverage.limits = [...new Set(coverage.limits)];
@@ -662,6 +696,7 @@ export function createRepositoryClient(
           if (!file) continue;
           const n = lines(file).length,
             start = r.full ? 1 : (r.start ?? 1);
+          if (n === 0 && r.start === undefined && r.end === undefined) continue;
           if (start > n) throw new JevError('invalid_input');
           ranges.push(window(file, start, r.full ? n : (r.end ?? n)));
         }
