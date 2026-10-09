@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -151,3 +152,23 @@ describe('evidence tools over stdio', () => {
     expect((await s.callTool({ requests: [] }).response).isError).toBe(true);
   });
 });
+
+it('services cancellation and catalogue requests during dense exact retrieval', async () => {
+  await writeFile(path.join(root, 'dense.txt'), 'hit\n'.repeat(127000));
+  const s = await session(503);
+  const pending = s.callTool(
+    { scope: 'dense.txt', terms: ['hit'], maxChars: 1000 },
+    500,
+    'retrieve_evidence',
+  );
+  // MCP suppresses the response to an acknowledged cancelled request.
+  const settled = pending.response.catch(() => undefined);
+  await delay(20);
+  s.cancel(pending.id, 'cancel dense source processing');
+  const catalogue = await s.send('tools/list', {}, 1500).response;
+  expect(catalogue).toHaveProperty('tools');
+  const result = await settled;
+  if (result && !result.isError)
+    expect(result.structuredContent).toMatchObject({ usage: { calls: 0 } });
+  expect(s.stdoutAsProtocolOnly()).toBe(true);
+}, 4000);

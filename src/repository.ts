@@ -4,7 +4,10 @@ import { isUtf8 } from 'node:buffer';
 import { readFile, realpath, stat, lstat, appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { setTimeout as delay } from 'node:timers/promises';
+import {
+  setTimeout as delay,
+  setImmediate as yieldTurn,
+} from 'node:timers/promises';
 import type { JevClient, JevEvaluateOptions } from './client.js';
 import type { JevQuestion, JevResult, JevData } from './contracts.js';
 import { JevError } from './errors.js';
@@ -51,6 +54,10 @@ export function createRepositoryClient(
   directory: string,
   log?: RetrievalLogOptions,
 ): RepositoryClient {
+  async function checkpoint(options: JevEvaluateOptions): Promise<void> {
+    await yieldTurn();
+    if (options.signal?.aborted) throw new JevError('cancelled');
+  }
   async function command(
     binary: string,
     args: string[],
@@ -511,13 +518,15 @@ export function createRepositoryClient(
           // Build locations from the same bytes used for source identity, rather than a racing rg read.
           for (const file of files) {
             const content = lines(file);
-            for (let i = 0; i < content.length; i++)
+            for (let i = 0; i < content.length; i++) {
+              if (i % 1024 === 0) await checkpoint(options);
               if (request.terms.some((t) => content[i]!.includes(t))) {
                 exact.push(window(file, Math.max(1, i - 15), i + 26));
                 const hits = anchors.get(file.path) ?? [];
                 hits.push(i + 1);
                 anchors.set(file.path, hits);
               }
+            }
           }
         }
         let candidates: File[] = files,
@@ -658,7 +667,9 @@ export function createRepositoryClient(
             })
             .filter((g) => g.order.length);
           let remaining = request.maxChars;
+          let rounds = 0;
           while (groups.some((g) => g.index < g.order.length)) {
+            if (rounds++ % 1024 === 0) await checkpoint(options);
             for (const group of groups) {
               // Skip a line that cannot fit; a later exact hit may still fit.
               while (group.index < group.order.length) {
