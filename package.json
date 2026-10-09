@@ -2,7 +2,7 @@
   "name": "@saintiago/jev",
   "version": "0.0.0",
   "private": true,
-  "description": "Repository discovery and whole-file screening with structured TypeSafe JEv judgments.",
+  "description": "Batched repository source evidence using ripgrep and TypeSafe JEv.",
   "license": "UNLICENSED",
   "type": "module",
   "engines": {
