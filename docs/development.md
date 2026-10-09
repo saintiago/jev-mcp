@@ -17,3 +17,14 @@ limits, missed evidence and fallback reads. Do not claim context savings establi
 Repository: saintiago/jev-mcp. Consumer integration belongs to Nexus. Explicit manual implementation
 requests take precedence over the configured Nexus workflow. Installation activation is separate
 from source merge and must preserve the owner's runtime instructions.
+
+## Reproducible comparison
+
+After building, run `python3 experiments/compare.py --repository /path/to/frozen/keeper
+--tasks experiments/keeper-tasks.json --output /path/to/new/results-directory` with local Codex
+authentication and `JEV_API_KEY` available. This explicitly invokes paid models. The same two
+questions and revision run ordinary rg/reads against evidence-only MCP access, reversing arm order
+between tasks. Each arm gets an isolated configuration and a temporary private auth copy, removed
+after execution. Outputs include token/cache counts, latency, tool events and answers for source-based
+quality checking. Artifacts can contain source evidence and are private experiment data; they are
+separate from sanitized production metadata logs. A single pair per question is exploratory.
